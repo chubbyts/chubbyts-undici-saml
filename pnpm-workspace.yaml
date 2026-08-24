@@ -1,0 +1,11 @@
+allowBuilds:
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
+  unrs-resolver: true
+packageExtensions:
+  '@stryker-mutator/core':
+    dependencies:
+      typescript: ^6.0.3
+overrides:
+  qs: '>=6.15.2'

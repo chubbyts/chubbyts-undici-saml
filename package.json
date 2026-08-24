@@ -1,0 +1,76 @@
+{
+  "name": "@chubbyts/chubbyts-undici-saml",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "A minimal SAML 2.0 service provider (Web Browser SSO) integration for chubbyts-undici-server.",
+  "keywords": [
+    "saml",
+    "saml2",
+    "sso",
+    "service-provider",
+    "assertion",
+    "middleware",
+    "undici"
+  ],
+  "author": "Dominik Zogg",
+  "license": "MIT",
+  "repository": "chubbyts/chubbyts-undici-saml",
+  "scripts": {
+    "build": "rm -Rf dist && tsc",
+    "cs-fix": "prettier --write src tests",
+    "cs": "prettier --check src tests",
+    "infection": "stryker run",
+    "lint-fix": "oxlint --fix src tests vitest.config.ts vitest.integration.config.ts",
+    "lint": "oxlint src tests vitest.config.ts vitest.integration.config.ts",
+    "prepare": "pnpm run build",
+    "test:integration": "vitest --config vitest.integration.config.ts",
+    "test": "vitest"
+  },
+  "prettier": {
+    "printWidth": 120,
+    "tabWidth": 2,
+    "singleQuote": true,
+    "trailingComma": "all"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./*": {
+      "types": "./*.d.ts",
+      "import": "./*.js",
+      "default": "./*.js"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@chubbyts/chubbyts-dic-config-factory": "^1.0.0",
+    "@chubbyts/chubbyts-dic-types": "^2.3.0",
+    "@chubbyts/chubbyts-log-types": "^3.3.0",
+    "@chubbyts/chubbyts-undici-server": "^1.2.0",
+    "@node-saml/node-saml": "^5.1.0",
+    "@xmldom/xmldom": "^0.9.12",
+    "jose": "^6.2.8"
+  },
+  "devDependencies": {
+    "@chubbyts/chubbyts-dic-config": "^2.3.0",
+    "@chubbyts/chubbyts-function-mock": "^2.3.0",
+    "@chubbyts/chubbyts-oxlint": "^1.0.1",
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
+    "@types/node": "^26.1.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "oxlint": "^1.77.0",
+    "prettier": "^3.9.6",
+    "selfsigned": "^5.5.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "xml-crypto": "^6.1.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "packageManager": "pnpm@11.20.0+sha512.9a6f330a95b66446ea088faf1521405a8a01f07fde7124cc9958dfed52d4bb436737e65b08f85f37b46fcba375092558ac51262b816844b22f63406ed166bfee"
+}

@@ -1,0 +1,25 @@
+/**
+ * Thrown by a saml response verifier if the given saml response itself is invalid (malformed, wrong signature,
+ * expired, wrong issuer / audience, non success status, ...). Any other error thrown by a saml response verifier is
+ * treated as an internal failure (unreachable idp metadata endpoint, ...) and gets rethrown by the middleware.
+ */
+export class InvalidSamlResponseError extends Error {
+  public constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    // oxlint-disable-next-line functional/immutable-data
+    this.name = 'InvalidSamlResponseError';
+  }
+}
+
+/**
+ * Thrown by the idp metadata resolver if the metadata cannot be fetched from the identity provider (non 2xx status,
+ * timeout, invalid xml) or is invalid (entity id mismatch, missing signing certificate, missing / insecure single
+ * sign-on location, ...). Treated as an internal failure by the middleware.
+ */
+export class IdpMetadataError extends Error {
+  public constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    // oxlint-disable-next-line functional/immutable-data
+    this.name = 'IdpMetadataError';
+  }
+}

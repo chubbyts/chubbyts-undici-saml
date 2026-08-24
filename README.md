@@ -1,0 +1,282 @@
+# chubbyts-undici-saml
+
+[![CI](https://github.com/chubbyts/chubbyts-undici-saml/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/chubbyts/chubbyts-undici-saml/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/chubbyts/chubbyts-undici-saml/badge.svg?branch=master)](https://coveralls.io/github/chubbyts/chubbyts-undici-saml?branch=master)
+[![Mutation testing badge](https://img.shields.io/endpoint?style=flat&url=https%3A%2F%2Fbadge-api.stryker-mutator.io%2Fgithub.com%2Fchubbyts%2Fchubbyts-undici-saml%2Fmaster)](https://dashboard.stryker-mutator.io/reports/github.com/chubbyts/chubbyts-undici-saml/master)
+[![npm-version](https://img.shields.io/npm/v/@chubbyts/chubbyts-undici-saml.svg)](https://www.npmjs.com/package/@chubbyts/chubbyts-undici-saml)
+
+[![bugs](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=bugs)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![code_smells](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=code_smells)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![coverage](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=coverage)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![duplicated_lines_density](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=duplicated_lines_density)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![ncloc](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=ncloc)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![sqale_rating](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=sqale_rating)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![alert_status](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=alert_status)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![reliability_rating](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=reliability_rating)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![security_rating](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=security_rating)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![sqale_index](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=sqale_index)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+[![vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=chubbyts_chubbyts-undici-saml&metric=vulnerabilities)](https://sonarcloud.io/dashboard?id=chubbyts_chubbyts-undici-saml)
+
+## Description
+
+A minimal SAML 2.0 service provider ([Web Browser SSO Profile][10]) integration for chubbyts-undici-server: resolves the identity provider's [metadata][11], redirects unauthenticated requests to the identity provider (HTTP-Redirect binding), consumes and verifies saml responses at the assertion consumer service (HTTP-POST binding, via [@node-saml/node-saml][4]), keeps the verified identity within an encrypted session cookie and passes it to the handler via request attributes.
+
+## Requirements
+
+ * node: >=22
+ * [@chubbyts/chubbyts-dic-types][14]: ^2.3.0
+ * [@chubbyts/chubbyts-log-types][2]: ^3.3.0
+ * [@chubbyts/chubbyts-undici-server][3]: ^1.2.0
+ * [@node-saml/node-saml][4]: ^5.1.0
+ * [@xmldom/xmldom][5]: ^0.9.12
+ * [jose][6]: ^6.2.8
+
+## Installation
+
+Through [NPM](https://www.npmjs.com) as [@chubbyts/chubbyts-undici-saml][1].
+
+```sh
+npm i @chubbyts/chubbyts-undici-saml@^1.0.0
+```
+
+## Usage
+
+```ts
+import { createIdpMetadataResolver } from '@chubbyts/chubbyts-undici-saml/dist/metadata';
+import type { SamlAttributes } from '@chubbyts/chubbyts-undici-saml/dist/middleware';
+import { createSamlAuthenticationMiddleware } from '@chubbyts/chubbyts-undici-saml/dist/middleware';
+import { createSamlServiceProvider } from '@chubbyts/chubbyts-undici-saml/dist/service-provider';
+import { createSamlSession } from '@chubbyts/chubbyts-undici-saml/dist/session';
+import type { Handler, ServerRequest } from '@chubbyts/chubbyts-undici-server/dist/server';
+import { Response } from '@chubbyts/chubbyts-undici-server/dist/server';
+
+const samlAuthenticationMiddleware = createSamlAuthenticationMiddleware(
+  createSamlSession({ secret: process.env.SESSION_SECRET as string }),
+  createSamlServiceProvider(createIdpMetadataResolver('https://idp.example.com/metadata'), {
+    entityId: 'https://sp.example.com',
+    assertionConsumerServiceUrl: 'https://sp.example.com/saml/acs',
+  }),
+  '/saml/acs',
+);
+
+// add the middleware to the routes you want to protect, e.g. within chubbyts-framework:
+// createGroup({ path: '/', ..., middlewares: [samlAuthenticationMiddleware, ...] })
+
+const handler: Handler = async (serverRequest: ServerRequest<SamlAttributes>): Promise<Response> => {
+  // attributes are typed as partial, the middleware guarantees "saml" for every handler behind it
+  const { identity } = serverRequest.attributes.saml!; // { nameId, nameIdFormat, sessionIndex?, authnContextClassRef?, issuer, attributes }
+
+  return new Response(JSON.stringify({ nameId: identity.nameId }), {
+    headers: { 'content-type': 'application/json' },
+  });
+};
+```
+
+ * **Flow:** An unauthenticated `GET` / `HEAD` request is answered with a `302` redirect to the identity provider's single sign-on location (a deflated `AuthnRequest` within the query, the current path and query as `RelayState`). The identity provider posts its saml response to the assertion consumer service path, where it is verified: on success a session cookie is set and a `303` redirect to the `RelayState` follows (only a same-origin absolute path is followed, anything else would be an open redirect and falls back to `/`), on failure a `403` is returned. Any other unauthenticated request (an expired session within a `POST`, a fetch from a spa, ...) is answered with a `401` instead of a redirect: it could not carry the login redirect anyway.
+ * **Rejected saml responses:** The actual reason (wrong signature, expired, wrong audience, ...) is only logged (level `info`) via the optional logger, never sent to the client. Errors not related to the saml response (unreachable identity provider, ...) are rethrown, so your error handling responds with a `5xx`.
+ * **Session:** The verified identity is stored within an encrypted (`dir` / `A256GCM`, key derived from the secret via sha256) and therefore also tamper-proof jwt cookie (`HttpOnly`, `Secure`, `SameSite=Lax` by default): stateless, no session storage needed. Trade-offs: a session cannot be revoked before its `maxAge` (default one hour), and it is not bound to the client: a stolen cookie (`HttpOnly` keeps it away from scripts, but not from a compromised device or proxy) can be replayed from elsewhere until it expires. Keep `maxAge` short, use the `__Host-` cookie prefix where possible (see cookie hardening below), and if revocation or client binding is required, put a server side session on top of the resolved identity. For a logout endpoint answer with the `createRemovalCookie()` value as `set-cookie` header. Single logout (SLO) is out of scope.
+ * **Signatures:** Both the saml response and the assertion must be signed by default (`wantAuthnResponseSigned` / `wantAssertionsSigned`). Many identity providers only sign one of them, disable the other explicitly instead of both.
+
+### Options
+
+```ts
+import { createIdpMetadataResolver } from '@chubbyts/chubbyts-undici-saml/dist/metadata';
+import { createSamlAuthenticationMiddleware } from '@chubbyts/chubbyts-undici-saml/dist/middleware';
+import { createSamlServiceProvider } from '@chubbyts/chubbyts-undici-saml/dist/service-provider';
+import { createSamlSession } from '@chubbyts/chubbyts-undici-saml/dist/session';
+
+// resolves and caches the identity provider metadata (entity id, single sign-on location, signing certificates),
+// lazily on first use
+const idpMetadataResolver = createIdpMetadataResolver('https://idp.example.com/metadata', {
+  entityId: 'https://idp.example.com', // expected idp entity id, default: not checked
+  fetch, // custom fetch for the metadata request, default: globalThis.fetch
+  maxAge: 3600, // seconds resolved metadata is cached (non-negative), default: 3600
+  timeout: 5, // seconds until the metadata request is aborted (non-negative), default: 5
+  cooldown: 30, // seconds until a failed (re)fetch is retried (non-negative), default: 30
+  maxSize: 1048576, // bytes the metadata response may have at most (non-negative), default: 1048576 (1 MiB)
+});
+
+// creates the authn request redirect url and verifies saml responses (signature, issuer, audience, conditions)
+const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, {
+  entityId: 'https://sp.example.com', // required: the service provider entity id (issuer of authn requests, audience of assertions)
+  assertionConsumerServiceUrl: 'https://sp.example.com/saml/acs', // required: where the identity provider posts the saml response to
+  clockTolerance: 5, // seconds (non-negative), default: 0
+  maxAssertionAge: 300, // seconds an assertion is accepted after its issue instant (non-negative), default: 0 (only the assertion's own NotOnOrAfter applies)
+  identifierFormat: 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent', // requested name id format (null: omit), default: emailAddress
+  forceAuthn: true, // request a fresh authentication, default: false
+  wantAssertionsSigned: true, // default: true
+  wantAuthnResponseSigned: true, // default: true
+  validateInResponseTo: 'ifPresent', // 'never' | 'ifPresent' | 'always', default: 'never'
+  authnContext: {
+    // requested authentication context classes (RequestedAuthnContext), default: none (the identity provider chooses)
+    classRefs: ['urn:oasis:names:tc:SAML:2.0:ac:classes:TimeSyncToken'],
+    comparison: 'minimum', // 'exact' | 'minimum' | 'maximum' | 'better', default: 'exact'
+  },
+  privateKey, // pem encoded private key to sign authn requests, default: not signed
+  certificate, // pem encoded certificate belonging to the privateKey
+  signatureAlgorithm: 'sha256', // 'sha256' | 'sha512' (sha1 is deliberately not offered), default: 'sha256'
+  decryptionKey, // pem encoded private key to decrypt encrypted assertions, default: not decrypted
+});
+
+const samlSession = createSamlSession({
+  secret: process.env.SESSION_SECRET as string, // required: at least 32 characters
+  maxAge: 3600, // seconds a session stays valid (non-negative), default: 3600
+  cookieName: 'saml-session', // default: 'saml-session' (consider '__Host-saml-session', see hardening below)
+  path: '/', // default: '/' (a rfc 6265 path-value)
+  secure: true, // default: true, disable for plain http local development only
+  sameSite: 'Lax', // 'Lax' | 'Strict' | 'None', default: 'Lax' ('Strict' would drop the cookie on the redirect after login)
+});
+
+const samlAuthenticationMiddleware = createSamlAuthenticationMiddleware(
+  samlSession,
+  samlServiceProvider,
+  '/saml/acs', // the path of the assertionConsumerServiceUrl
+  logger, // @chubbyts/chubbyts-log-types compatible logger, optional, default: no-op
+);
+```
+
+ * **Metadata:** The metadata document is the trust anchor: whoever controls its signing certificates controls which saml responses are accepted. The transport (tls) is what makes it trustworthy, an xml signature on the metadata document itself is not verified: use a `https` metadata url in production, plain `http` is only meant for local development. A `https` metadata url advertising a plain `http` single sign-on location is rejected in any case, the metadata request does not follow redirects (a `https` → `http` redirect would silently bypass these checks), urls with embedded credentials (`https://user:pass@...`) are rejected, and a response larger than `maxSize` is discarded (a misbehaving identity provider must not exhaust memory). If tls alone is not enough for your threat model (e.g. a federation with signed metadata), verify the signature within a custom `IdpMetadataResolver` (see custom parts). The root element must be an `EntityDescriptor` (a federation `EntitiesDescriptor` aggregate is out of scope), certificate rotation is picked up with the next refresh (`maxAge`). The validity period of the signing certificates is deliberately not checked: within saml metadata the certificate is a key container, the identity provider decides which keys are trusted by publishing them (a long expired certificate within the metadata is a widespread, harmless situation, and a leaked key is retired by removing it from the metadata, not by waiting for its expiry). A certificate removed from the metadata stops being trusted with the next refresh.
+ * **Outages:** An identity provider outage should not take the service provider down: if the metadata is expired and the refetch fails, the last known metadata keeps being used (retried after `cooldown`). Only if there never was a successful fetch the error is thrown (`5xx`), within the cooldown immediately without hitting the identity provider again. A failed or invalid metadata response is reported as `IdpMetadataError` (`@chubbyts/chubbyts-undici-saml/dist/error`, with the original error as `cause`), errors of the fetch implementation itself (dns, connection refused, ...) are passed through as they are.
+ * **Issuer:** node-saml only verifies the signature of an authn response against the trusted certificates, therefore the issuer of the assertion is additionally checked against the metadata's entity id: an identity provider signing for multiple issuers (e.g. tenants) with one key must not be able to cross them.
+ * **Unsolicited responses:** With the default `validateInResponseTo: 'never'` an identity provider initiated (unsolicited) saml response is accepted: anyone able to obtain a valid saml response for *some* account can log a victim's browser into that account (login csrf). If your application only expects service provider initiated logins, set `'ifPresent'` (verifies the `InResponseTo` against the pending authn request ids if given, and rejects a replayed one) or `'always'` (additionally rejects unsolicited responses). The pending request ids are held in memory: they do not survive a restart and are not shared between multiple instances, which is why `'never'` is the default: with `'ifPresent'` or `'always'` a service provider initiated login only succeeds if the saml response reaches the instance that issued the authn request (single instance, sticky sessions). Note that `'ifPresent'` alone does not prevent login csrf, only replay: an unsolicited response carries no `InResponseTo` and is still accepted, use `'always'` for that.
+ * **Authentication context:** Without `authnContext` no `RequestedAuthnContext` is sent, the identity provider authenticates the way it is configured (password, kerberos, mfa, ...). Use `authnContext` to ask for a specific class (e.g. a multi factor class for sensitive applications). The request is only a wish: check `identity.authnContextClassRef` (the class the identity provider asserts within the `AuthnStatement`) before relying on it, an identity provider ignoring the request would otherwise be trusted for a login it never performed.
+ * **Sessions across instances:** The session cookie itself is stateless: multiple instances only need the same `secret`.
+ * **Cookie hardening:** With the defaults (`path: '/'`, `secure: true`) the cookie qualifies for the `__Host-` prefix (`cookieName: '__Host-saml-session'`): browsers then refuse to accept it from an insecure origin, a subdomain or with another path, so a sibling host cannot plant a session cookie. It is not the default because it breaks plain `http` local development (`secure: false`).
+ * **Response size:** The assertion consumer service is reachable without authentication, so a `SAMLResponse` larger than 256 KiB (`MAX_SAML_RESPONSE_SIZE`, a real one is a few dozen kilobytes at most) is rejected with `413` before it is parsed or its signature is verified (an arbitrarily large, adversarial xml document would exhaust cpu and memory). A `Content-Length` header is checked before the body is read, a chunked body is only checked after it got read: bound the request body size (and rate limit the endpoint) within the server or proxy in front as well.
+ * **Caching:** The responses of the middleware (login redirect, the assertion consumer service response carrying the session cookie, `401`, `403`, ...) are sent with `Cache-Control: no-store`, so that no shared cache ever serves them to another client.
+ * **Redirect target:** The `RelayState` is only followed if it is a same-origin absolute path made of printable ascii (`/path?query`): a scheme, an authority (`//host`, `/\\host`), whitespace or control characters fall back to `/`.
+ * **Browser clients:** The login is a top-level navigation (redirects, form post), not something a `fetch` based client can follow: protect html routes with this middleware and use it as-is, or let your spa handle the `401` of api requests by navigating to a protected route.
+ * **Custom parts:** Each part is replaceable: `IdpMetadataResolver` is `() => Promise<IdpMetadata>`, `SamlServiceProvider` is `{ resolveLoginUrl, verifySamlResponse }`, `SamlSession` is `{ resolveIdentity, createCookie, createRemovalCookie }`. Throw an `InvalidSamlResponseError` (`@chubbyts/chubbyts-undici-saml/dist/error`) within a custom `verifySamlResponse` to get the `403` response, any other error is rethrown.
+
+### Service factories (chubbyts-dic-config)
+
+The package ships service factories for a [chubbyts-dic-config][15] (or any [chubbyts-dic-types][14] compatible) container within `@chubbyts/chubbyts-undici-saml/dist/service-factory`, configured through `config.chubbyts.saml`:
+
+```ts
+import type { ConfigFactory } from '@chubbyts/chubbyts-dic-config/dist/dic-config';
+import { createContainerByConfigFactory } from '@chubbyts/chubbyts-dic-config/dist/dic-config';
+import type { SamlConfig } from '@chubbyts/chubbyts-undici-saml/dist/service-factory';
+import { samlAuthenticationMiddlewareServiceFactory } from '@chubbyts/chubbyts-undici-saml/dist/service-factory';
+import type { Middleware } from '@chubbyts/chubbyts-undici-server/dist/server';
+
+const container = createContainerByConfigFactory({
+  chubbyts: {
+    saml: {
+      idpMetadataUrl: 'https://idp.example.com/metadata', // required
+      entityId: 'https://sp.example.com', // required
+      assertionConsumerServiceUrl: 'https://sp.example.com/saml/acs', // required
+      sessionSecret: process.env.SESSION_SECRET as string, // required
+      // idpEntityId: 'https://idp.example.com',
+      // fetch,
+      // maxAge: 3600,
+      // timeout: 5,
+      // cooldown: 30,
+      // maxSize: 1048576,
+      // clockTolerance: 5,
+      // maxAssertionAge: 300,
+      // identifierFormat: 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',
+      // forceAuthn: true,
+      // wantAssertionsSigned: true,
+      // wantAuthnResponseSigned: true,
+      // validateInResponseTo: 'ifPresent',
+      // authnContext: { classRefs: ['urn:oasis:names:tc:SAML:2.0:ac:classes:TimeSyncToken'], comparison: 'minimum' },
+      // privateKey,
+      // certificate,
+      // signatureAlgorithm: 'sha256',
+      // decryptionKey,
+      // sessionMaxAge: 3600,
+      // sessionCookieName: '__Host-saml-session',
+      // sessionCookiePath: '/',
+      // sessionCookieSecure: true,
+      // sessionCookieSameSite: 'Lax',
+    } satisfies SamlConfig,
+  },
+  dependencies: {
+    factories: new Map<string, ConfigFactory>([
+      ['samlAuthenticationMiddleware', samlAuthenticationMiddlewareServiceFactory()],
+    ]),
+  },
+})();
+
+const samlAuthenticationMiddleware = container.get<Middleware>('samlAuthenticationMiddleware');
+```
+
+The `samlAuthenticationMiddlewareServiceFactory` uses the services `samlSession`, `samlServiceProvider` and (the `samlServiceProviderServiceFactory` behind it) `samlIdpMetadataResolver` of the container if registered, and creates them through the shipped `samlSessionServiceFactory`, `samlServiceProviderServiceFactory` and `idpMetadataResolverServiceFactory` otherwise. Register any of them under its name to replace it (e.g. a custom `SamlServiceProvider`) or to share it with other services. A `logger` service is used if registered, a missing `idpMetadataUrl` / `entityId` / `assertionConsumerServiceUrl` / `sessionSecret` throws at construction time.
+
+#### With names
+
+To protect different parts of an application through different identity providers, the same factories can be registered multiple times with a name: the config is then read from `config.chubbyts.saml.<name>` and the name gets appended to each service id (`samlAuthenticationMiddlewarepartner`, `samlSessionpartner`, ...). Use a distinct `assertionConsumerServiceUrl` and `sessionCookieName` per name, so that the responses and sessions of the identity providers do not collide.
+
+```ts
+const container = createContainerByConfigFactory({
+  chubbyts: {
+    saml: {
+      internal: {
+        idpMetadataUrl: 'https://internal-idp.example.com/metadata',
+        entityId: 'https://sp.example.com',
+        assertionConsumerServiceUrl: 'https://sp.example.com/saml/internal/acs',
+        sessionSecret: process.env.INTERNAL_SESSION_SECRET as string,
+        sessionCookieName: 'saml-session-internal',
+      },
+      partner: {
+        idpMetadataUrl: 'https://partner-idp.example.com/metadata',
+        entityId: 'https://sp.example.com',
+        assertionConsumerServiceUrl: 'https://sp.example.com/saml/partner/acs',
+        sessionSecret: process.env.PARTNER_SESSION_SECRET as string,
+        sessionCookieName: 'saml-session-partner',
+      },
+    } satisfies Record<string, SamlConfig>,
+  },
+  dependencies: {
+    factories: new Map<string, ConfigFactory>([
+      ['samlAuthenticationMiddlewareinternal', samlAuthenticationMiddlewareServiceFactory('internal')],
+      ['samlAuthenticationMiddlewarepartner', samlAuthenticationMiddlewareServiceFactory('partner')],
+    ]),
+  },
+})();
+
+const partnerSamlAuthenticationMiddleware = container.get<Middleware>('samlAuthenticationMiddlewarepartner');
+```
+
+## Testing against a local SAML identity provider
+
+[Keycloak][7] as a docker container is the easiest way to test manually:
+
+```sh
+docker run --rm -p 8080:8080 \
+  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+  -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+  quay.io/keycloak/keycloak:26.7 start-dev
+```
+
+Within the admin console at http://localhost:8080 (admin/admin) create a realm `test` and a client with the `saml` protocol whose *Client ID* is your `entityId` (e.g. `https://sp.example.com`), set *Valid redirect URIs* to your `assertionConsumerServiceUrl` and disable *Client signature required* (or configure the `privateKey` / `certificate` options), then:
+
+```ts
+const idpMetadataResolver = createIdpMetadataResolver('http://localhost:8080/realms/test/protocol/saml/descriptor');
+```
+
+Keycloak specifics: by default Keycloak signs the response but not the assertion (`wantAssertionsSigned: false`, or enable *Sign assertions* within the client), and the metadata is served for the URL the request comes through, so use the same host for the resolver and the browser (or pin it, e.g. `KC_HOSTNAME=http://keycloak:8080` in docker compose).
+
+The tests of this repository are self-contained: the integration tests run against an in-process http server serving generated metadata and saml responses signed with a generated certificate ([selfsigned][8], [xml-crypto][9]), no docker required:
+
+```sh
+pnpm test:integration --run
+```
+
+## Copyright
+
+2026 Dominik Zogg
+
+[1]: https://www.npmjs.com/package/@chubbyts/chubbyts-undici-saml
+[2]: https://www.npmjs.com/package/@chubbyts/chubbyts-log-types
+[3]: https://www.npmjs.com/package/@chubbyts/chubbyts-undici-server
+[4]: https://www.npmjs.com/package/@node-saml/node-saml
+[5]: https://www.npmjs.com/package/@xmldom/xmldom
+[6]: https://www.npmjs.com/package/jose
+[7]: https://www.keycloak.org
+[8]: https://www.npmjs.com/package/selfsigned
+[9]: https://www.npmjs.com/package/xml-crypto
+[10]: https://docs.oasis-open.org/security/saml/v2.0/saml-profiles-2.0-os.pdf
+[11]: https://docs.oasis-open.org/security/saml/v2.0/saml-metadata-2.0-os.pdf
+[14]: https://www.npmjs.com/package/@chubbyts/chubbyts-dic-types
+[15]: https://www.npmjs.com/package/@chubbyts/chubbyts-dic-config
