@@ -140,7 +140,7 @@ export const createIdpMetadataResolver = (
 
     // an EntitiesDescriptor (federation aggregate) is out of scope on purpose: point the resolver at the metadata of
     // the one identity provider to trust
-    if (!root || root.namespaceURI !== METADATA_NAMESPACE || root.localName !== 'EntityDescriptor') {
+    if (root?.namespaceURI !== METADATA_NAMESPACE || root.localName !== 'EntityDescriptor') {
       throw new IdpMetadataError(`Missing EntityDescriptor root element within idp metadata from "${metadataUrl}"`);
     }
 

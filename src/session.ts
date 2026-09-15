@@ -19,7 +19,7 @@ export type SamlSessionOptions = {
   sameSite?: 'Lax' | 'Strict' | 'None';
 };
 
-const SAME_SITE_VALUES: ReadonlyArray<string> = ['Lax', 'Strict', 'None'];
+const SAME_SITE_VALUES: ReadonlySet<string> = new Set(['Lax', 'Strict', 'None']);
 
 // cookie-name is a rfc 6265 token: anything else could break out of the set-cookie header
 const COOKIE_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -61,7 +61,7 @@ export const createSamlSession = (options: SamlSessionOptions): SamlSession => {
     throw new Error(`Invalid path "${path}": must start with "/" and be a rfc 6265 path-value`);
   }
 
-  if (!SAME_SITE_VALUES.includes(sameSite)) {
+  if (!SAME_SITE_VALUES.has(sameSite)) {
     throw new Error(`Invalid sameSite "${String(sameSite)}": must be one of "Lax", "Strict", "None"`);
   }
 

@@ -69,7 +69,9 @@ const resolveRequiredSamlConfig = <K extends RequiredKey>(
   const value = samlConfig[key];
 
   if (value === undefined) {
-    throw new Error(`Missing config "chubbyts.saml.${name === '' ? '' : `${name}.`}${key}"`);
+    const prefix = name === '' ? '' : `${name}.`;
+
+    throw new Error(`Missing config "chubbyts.saml.${prefix}${key}"`);
   }
 
   return value;

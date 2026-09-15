@@ -120,10 +120,10 @@ const AUTHN_CONTEXT_COMPARISONS: ReadonlyArray<string> = ['exact', 'minimum', 'm
 const SIGNATURE_ALGORITHMS: ReadonlyArray<string> = ['sha256', 'sha512'];
 
 // the signature algorithms accepted within a signed http-redirect query (node-saml would accept any hash node knows)
-const SIGNATURE_ALGORITHM_URIS: ReadonlyArray<string> = [
+const SIGNATURE_ALGORITHM_URIS: ReadonlySet<string> = new Set([
   'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
   'http://www.w3.org/2001/04/xmldsig-more#rsa-sha512',
-];
+]);
 
 const PROTOCOL_NAMESPACE = 'urn:oasis:names:tc:SAML:2.0:protocol';
 
@@ -265,7 +265,7 @@ const parseProtocolRoot = (xml: string, localName: string, source: string): Elem
     throw new InvalidSamlResponseError(`Cannot parse ${source}: invalid xml`, error);
   }
 
-  if (!root || root.namespaceURI !== PROTOCOL_NAMESPACE || root.localName !== localName) {
+  if (root?.namespaceURI !== PROTOCOL_NAMESPACE || root.localName !== localName) {
     throw new InvalidSamlResponseError(`Missing ${localName} root element within ${source}`);
   }
 
@@ -332,7 +332,7 @@ const parseLogoutMessage = (
     throw new InvalidSamlResponseError('Missing "SigAlg" or "Signature" parameter: the logout message must be signed');
   }
 
-  if (!SIGNATURE_ALGORITHM_URIS.includes(sigAlg)) {
+  if (!SIGNATURE_ALGORITHM_URIS.has(sigAlg)) {
     throw new InvalidSamlResponseError(`Unsupported signature algorithm "${sigAlg}"`);
   }
 
