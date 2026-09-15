@@ -131,6 +131,11 @@ const PROTOCOL_NAMESPACE = 'urn:oasis:names:tc:SAML:2.0:protocol';
 // otherwise inflate to megabytes before it is parsed)
 const MAX_LOGOUT_MESSAGE_SIZE = 65_536;
 
+// a logout message is delivered by a browser redirect right after it got issued: one issued longer ago is a replay. A
+// signed logout message could otherwise be replayed for as long as the identity provider's key is trusted (the
+// NotOnOrAfter of a logout request is optional and a logout response has none)
+const MAX_LOGOUT_MESSAGE_AGE = 300;
+
 type LogoutMessageType = 'SAMLRequest' | 'SAMLResponse';
 
 type LogoutMessage = {
@@ -262,6 +267,26 @@ const assertDestination = (root: Element, destination: string, required: boolean
   }
 };
 
+// a logout message (signed as a whole) must have been issued recently: node-saml only checks the optional NotOnOrAfter
+// of a logout request, so without one a captured logout message could be replayed forever (to log a user out again
+// and again, or to remove a session cookie via a replayed logout response)
+const assertIssueInstant = (root: Element, clockTolerance: number): void => {
+  const issueInstant = Date.parse(root.getAttribute('IssueInstant') ?? '');
+
+  if (Number.isNaN(issueInstant)) {
+    throw new InvalidSamlResponseError('Missing or invalid IssueInstant within logout message');
+  }
+
+  const now = Date.now();
+  const toleranceMs = clockTolerance * 1000;
+
+  if (issueInstant > now + toleranceMs || issueInstant + MAX_LOGOUT_MESSAGE_AGE * 1000 <= now - toleranceMs) {
+    throw new InvalidSamlResponseError(
+      `Logout message issued at "${new Date(issueInstant).toISOString()}" is not within the last ${MAX_LOGOUT_MESSAGE_AGE}s`,
+    );
+  }
+};
+
 // the raw query as received: the signature covers the url encoded SAMLRequest / SAMLResponse, RelayState and SigAlg
 // parameters as sent by the identity provider, so node-saml verifies it against the original query string
 const parseLogoutMessage = (
@@ -269,6 +294,7 @@ const parseLogoutMessage = (
   type: LogoutMessageType,
   localName: 'LogoutRequest' | 'LogoutResponse',
   destination: string,
+  clockTolerance: number,
 ): LogoutMessage => {
   const parameters = new URLSearchParams(query);
 
@@ -301,6 +327,7 @@ const parseLogoutMessage = (
   const root = parseProtocolRoot(xml, localName, `"${type}" parameter`);
 
   assertDestination(root, destination, true);
+  assertIssueInstant(root, clockTolerance);
 
   return { container: { [type]: message, SigAlg: sigAlg, Signature: signature }, root };
 };
@@ -526,7 +553,13 @@ export const createSamlServiceProvider = (
 
     const { metadata, saml } = await resolveSaml();
 
-    const { container } = parseLogoutMessage(query, 'SAMLRequest', 'LogoutRequest', singleLogoutServiceUrl);
+    const { container } = parseLogoutMessage(
+      query,
+      'SAMLRequest',
+      'LogoutRequest',
+      singleLogoutServiceUrl,
+      clockTolerance,
+    );
 
     // the logout response is sent to the single logout location of the metadata: without one there is nowhere to
     // answer, and an identity provider not advertising single logout should not request it
@@ -540,7 +573,7 @@ export const createSamlServiceProvider = (
     let result: Awaited<ReturnType<SAML['validateRedirectAsync']>>;
 
     try {
-      // node-saml verifies the query signature against the trusted certificates, the issuer and the validity period
+      // node-saml verifies the query signature against the trusted certificates, the issuer and (if given) NotOnOrAfter
       result = await saml.validateRedirectAsync(container, query);
     } catch (error) {
       throw new InvalidSamlResponseError(error instanceof Error ? error.message : String(error), error);
@@ -567,7 +600,13 @@ export const createSamlServiceProvider = (
 
     const { saml } = await resolveSaml();
 
-    const { container, root } = parseLogoutMessage(query, 'SAMLResponse', 'LogoutResponse', singleLogoutServiceUrl);
+    const { container, root } = parseLogoutMessage(
+      query,
+      'SAMLResponse',
+      'LogoutResponse',
+      singleLogoutServiceUrl,
+      clockTolerance,
+    );
 
     // node-saml only validates a given InResponseTo, never a missing one: with "always" an unsolicited logout
     // response is rejected here

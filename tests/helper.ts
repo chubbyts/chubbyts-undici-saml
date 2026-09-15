@@ -91,6 +91,7 @@ export type LogoutResponseXmlOptions = {
   id?: string;
   inResponseTo?: string;
   status?: string;
+  issueInstant?: Date;
 };
 
 export const createLogoutResponseXml = (options: LogoutResponseXmlOptions): string => {
@@ -100,9 +101,10 @@ export const createLogoutResponseXml = (options: LogoutResponseXmlOptions): stri
     id = '_logout-response-1',
     inResponseTo,
     status = 'urn:oasis:names:tc:SAML:2.0:status:Success',
+    issueInstant = new Date(),
   } = options;
 
-  return `<samlp:LogoutResponse xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${id}" Version="2.0" IssueInstant="${new Date().toISOString()}" Destination="${destination}"${
+  return `<samlp:LogoutResponse xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${id}" Version="2.0" IssueInstant="${issueInstant.toISOString()}" Destination="${destination}"${
     inResponseTo !== undefined ? ` InResponseTo="${inResponseTo}"` : ''
   }><saml:Issuer>${idpEntityId}</saml:Issuer><samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status></samlp:LogoutResponse>`;
 };

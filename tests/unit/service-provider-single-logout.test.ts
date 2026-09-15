@@ -224,6 +224,20 @@ test('verify logout request with expired request within clock tolerance', async 
   verifyMocks();
 });
 
+test('verify logout request issued long ago within clock tolerance', async () => {
+  const [samlServiceProvider, verifyMocks] = createServiceProvider(metadata, { ...options, clockTolerance: 120 });
+
+  const query = createLogoutRequestQuery({ issueInstant: new Date(Date.now() - 360_000) });
+
+  expect(await samlServiceProvider.verifyLogoutRequest(query)).toStrictEqual({
+    id: '_logout-request-1',
+    nameId: 'user@example.com',
+    nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+  });
+
+  verifyMocks();
+});
+
 test('verify logout request without service provider single logout service url', async () => {
   const [samlServiceProvider, verifyMocks] = createServiceProvider(
     metadata,
@@ -250,6 +264,10 @@ test('verify logout request without identity provider single logout service url'
 
   verifyMocks();
 });
+
+// a logout message is delivered by a redirect right away: one issued more than five minutes ago is a replay
+const longAgo = new Date(Date.now() - 400_000);
+const future = new Date(Date.now() + 120_000);
 
 test.each<{ name: string; query: string; message: string; cause?: boolean }>([
   { name: 'missing SAMLRequest', query: 'RelayState=state', message: 'Missing "SAMLRequest" parameter' },
@@ -322,6 +340,40 @@ test.each<{ name: string; query: string; message: string; cause?: boolean }>([
       ),
     ),
     message: 'Destination mismatch: expected "https://sp.example.com/saml/slo", given "null"',
+  },
+  {
+    name: 'issued too long ago',
+    query: createLogoutRequestQuery({ issueInstant: longAgo }),
+    message: `Logout message issued at "${longAgo.toISOString()}" is not within the last 300s`,
+  },
+  {
+    name: 'issued in the future',
+    query: createLogoutRequestQuery({ issueInstant: future }),
+    message: `Logout message issued at "${future.toISOString()}" is not within the last 300s`,
+  },
+  {
+    name: 'missing IssueInstant',
+    query: createRedirectQuery(
+      keyMaterial,
+      'SAMLRequest',
+      createLogoutRequestXml({ idpEntityId, destination: singleLogoutServiceUrl, issueInstant: longAgo }).replace(
+        ` IssueInstant="${longAgo.toISOString()}"`,
+        '',
+      ),
+    ),
+    message: 'Missing or invalid IssueInstant within logout message',
+  },
+  {
+    name: 'invalid IssueInstant',
+    query: createRedirectQuery(
+      keyMaterial,
+      'SAMLRequest',
+      createLogoutRequestXml({ idpEntityId, destination: singleLogoutServiceUrl, issueInstant: longAgo }).replace(
+        ` IssueInstant="${longAgo.toISOString()}"`,
+        ' IssueInstant="yesterday"',
+      ),
+    ),
+    message: 'Missing or invalid IssueInstant within logout message',
   },
   {
     name: 'wrong signature key',
@@ -494,6 +546,15 @@ test.each<{ name: string; query: string; message: string }>([
     ),
     message:
       'Destination mismatch: expected "https://sp.example.com/saml/slo", given "https://other-sp.example.com/saml/slo"',
+  },
+  {
+    name: 'issued too long ago',
+    query: createRedirectQuery(
+      keyMaterial,
+      'SAMLResponse',
+      createLogoutResponseXml({ idpEntityId, destination: singleLogoutServiceUrl, issueInstant: longAgo }),
+    ),
+    message: `Logout message issued at "${longAgo.toISOString()}" is not within the last 300s`,
   },
   {
     name: 'none success status',
