@@ -82,6 +82,11 @@ test.each<{ name: string; options: SamlServiceProviderOptions; message: string }
     message: 'Invalid validateInResponseTo "sometimes": must be one of "never", "ifPresent", "always"',
   },
   {
+    name: 'null authnContext',
+    options: { ...options, authnContext: null as unknown as { classRefs: Array<string> } },
+    message: 'Invalid authnContext: classRefs must be a non-empty array of non-empty strings',
+  },
+  {
     name: 'authnContext without classRefs',
     options: { ...options, authnContext: {} as { classRefs: Array<string> } },
     message: 'Invalid authnContext: classRefs must be a non-empty array of non-empty strings',
@@ -139,6 +144,59 @@ test('resolve login url', async () => {
   expect(authnRequest).toContain(`>${spEntityId}</saml:Issuer>`);
   expect(authnRequest).not.toContain('RequestedAuthnContext');
   expect(loginUrl.searchParams.get('SigAlg')).toBeNull();
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});
+
+test.each<{
+  name: string;
+  options: Partial<SamlServiceProviderOptions>;
+  expectedFormat: string | undefined;
+  expectedForceAuthn: boolean;
+}>([
+  {
+    name: 'defaults',
+    options: {},
+    expectedFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+    expectedForceAuthn: false,
+  },
+  {
+    name: 'identifierFormat and forceAuthn',
+    options: { identifierFormat: 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent', forceAuthn: true },
+    expectedFormat: 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',
+    expectedForceAuthn: true,
+  },
+  {
+    name: 'null identifierFormat',
+    options: { identifierFormat: null },
+    expectedFormat: undefined,
+    expectedForceAuthn: false,
+  },
+])('resolve login url with options: $name', async ({ options: loginOptions, expectedFormat, expectedForceAuthn }) => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, { ...options, ...loginOptions });
+
+  const loginUrl = new URL(await samlServiceProvider.resolveLoginUrl('/'));
+
+  const authnRequest = inflateRawSync(
+    Buffer.from(loginUrl.searchParams.get('SAMLRequest') as string, 'base64'),
+  ).toString();
+
+  // a null identifierFormat omits the Format of the NameIDPolicy (the identity provider chooses)
+  expect(authnRequest).toContain(
+    `<samlp:NameIDPolicy xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" AllowCreate="true"${
+      expectedFormat !== undefined ? ` Format="${expectedFormat}"` : ''
+    }/>`,
+  );
+
+  if (expectedForceAuthn) {
+    expect(authnRequest).toContain('ForceAuthn="true"');
+  } else {
+    expect(authnRequest).not.toContain('ForceAuthn');
+  }
 
   expect(idpMetadataResolverMocks).toHaveLength(0);
 });
@@ -215,7 +273,7 @@ test('verify saml response', async () => {
     attributes: { email: ['user@example.com'], roles: ['admin', 'user'] },
   });
 
-  expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toEqual({
+  expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toStrictEqual({
     nameId: 'user@example.com',
     nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
     sessionIndex: '_session-1',
@@ -236,7 +294,7 @@ test('verify saml response without session index, authn context and attributes',
 
   const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, authnContextClassRef: null });
 
-  expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toEqual({
+  expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toStrictEqual({
     nameId: 'user@example.com',
     nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
     issuer: idpEntityId,
@@ -428,6 +486,24 @@ test('verify saml response with expired assertion within clock tolerance', async
   expect(idpMetadataResolverMocks).toHaveLength(0);
 });
 
+test('verify saml response with assertion within maxAssertionAge', async () => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, { ...options, maxAssertionAge: 300 });
+
+  const samlResponse = createSamlResponse(keyMaterial, {
+    ...responseOptions,
+    issueInstant: new Date(Date.now() - 120_000),
+    notBefore: new Date(Date.now() - 120_000),
+  });
+
+  expect((await samlServiceProvider.verifySamlResponse(samlResponse)).nameId).toBe('user@example.com');
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});
+
 test('verify saml response with assertion older than maxAssertionAge', async () => {
   const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
     { parameters: [], return: Promise.resolve(metadata) },
@@ -558,6 +634,41 @@ test('verify saml response with validateInResponseTo "ifPresent"', async () => {
   await expectInvalidSamlResponseError(
     samlServiceProvider.verifySamlResponse(createSamlResponse(keyMaterial, { ...responseOptions, inResponseTo })),
   );
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});
+
+test('verify saml response with validateInResponseTo "ifPresent" and rotated metadata', async () => {
+  const rotatedKeyMaterial = loadKeyMaterial('other');
+
+  const rotatedMetadata: IdpMetadata = { ...metadata, signingCertificates: [rotatedKeyMaterial.certificate] };
+
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+    { parameters: [], return: Promise.resolve(rotatedMetadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, {
+    ...options,
+    validateInResponseTo: 'ifPresent',
+  });
+
+  const loginUrl = new URL(await samlServiceProvider.resolveLoginUrl('/resource'));
+
+  const authnRequest = inflateRawSync(
+    Buffer.from(loginUrl.searchParams.get('SAMLRequest') as string, 'base64'),
+  ).toString();
+
+  const inResponseTo = /ID="([^"]+)"/.exec(authnRequest)?.[1] as string;
+
+  // the metadata got rotated while the login was pending: the pending authn request id survives the rotation
+  expect(
+    (
+      await samlServiceProvider.verifySamlResponse(
+        createSamlResponse(rotatedKeyMaterial, { ...responseOptions, inResponseTo }),
+      )
+    ).nameId,
+  ).toBe('user@example.com');
 
   expect(idpMetadataResolverMocks).toHaveLength(0);
 });
@@ -903,7 +1014,7 @@ test('verify saml response without name id format', async () => {
   // node-saml only sets the name id format if the NameID carries a Format attribute
   const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, nameIdFormat: null });
 
-  expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toEqual({
+  expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toStrictEqual({
     nameId: 'user@example.com',
     authnContextClassRef: 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
     issuer: idpEntityId,

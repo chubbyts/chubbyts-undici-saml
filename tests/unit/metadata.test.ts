@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { expect, test, vi } from 'vitest';
 import { useFunctionMock } from '@chubbyts/chubbyts-function-mock/dist/function-mock';
 import type { IdpMetadata } from '../../src/metadata';
@@ -57,6 +58,8 @@ test.each<{ name: string; metadataUrl: string }>([
   { name: 'not a url', metadataUrl: 'not a url' },
   { name: 'non http scheme', metadataUrl: 'ftp://idp.example.com/metadata' },
   { name: 'embedded credentials', metadataUrl: 'https://user:pass@idp.example.com/metadata' },
+  { name: 'embedded username', metadataUrl: 'https://user@idp.example.com/metadata' },
+  { name: 'embedded password', metadataUrl: 'https://:pass@idp.example.com/metadata' },
 ])('create resolver with invalid metadataUrl: $name', ({ metadataUrl: invalidMetadataUrl }) => {
   expect(() => createIdpMetadataResolver(invalidMetadataUrl)).toThrow(
     `Invalid metadataUrl "${invalidMetadataUrl}": must be an absolute http(s) url`,
@@ -91,6 +94,21 @@ test('resolve metadata exceeding maxSize', async () => {
     idpMetadataResolver(),
     'Cannot fetch idp metadata from "https://idp.example.com/metadata": exceeds 100 bytes',
   );
+
+  expect(fetchMocks).toHaveLength(0);
+});
+
+test('resolve metadata of exactly maxSize', async () => {
+  const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
+    createFetchMock(metadataUrl, new Response(metadataXml)),
+  ]);
+
+  const idpMetadataResolver = createIdpMetadataResolver(metadataUrl, {
+    fetch,
+    maxSize: Buffer.byteLength(metadataXml),
+  });
+
+  expect(await idpMetadataResolver()).toEqual(metadata);
 
   expect(fetchMocks).toHaveLength(0);
 });
@@ -174,7 +192,7 @@ test('resolve metadata with multiple key descriptors', async () => {
   const xml = `<?xml version="1.0" encoding="UTF-8"?><md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${entityId}"><md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><md:KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>
     Q2Vy
     dDE=
-  </ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:KeyDescriptor><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>Q2VydDI=</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:KeyDescriptor use="encryption"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>Q2VydDM=</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate></ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${singleSignOnServiceLocation}"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
+  </ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:KeyDescriptor><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>Q2VydDI=</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:KeyDescriptor use="encryption"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>Q2VydDM=</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:KeyDescriptor use=""><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>Q2VydDQ=</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate></ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${singleSignOnServiceLocation}"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
 
   const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
     createFetchMock(metadataUrl, new Response(xml)),
@@ -182,8 +200,12 @@ test('resolve metadata with multiple key descriptors', async () => {
 
   const idpMetadataResolver = createIdpMetadataResolver(metadataUrl, { fetch });
 
-  // the whitespace within the first certificate is stripped, the encryption certificate and the empty one are ignored
-  expect(await idpMetadataResolver()).toEqual({ ...metadata, signingCertificates: ['Q2VydDE=', 'Q2VydDI='] });
+  // the whitespace within the first certificate is stripped, a missing or empty use means signing as well, the
+  // encryption certificate and the empty one are ignored
+  expect(await idpMetadataResolver()).toEqual({
+    ...metadata,
+    signingCertificates: ['Q2VydDE=', 'Q2VydDI=', 'Q2VydDQ='],
+  });
 
   expect(fetchMocks).toHaveLength(0);
 });
@@ -315,6 +337,8 @@ test.each<{ name: string; body: string }>([
   // a duplicated attribute is a fatal error (the others above are recoverable ones)
   { name: 'duplicated attribute', body: '<md:EntityDescriptor entityID="1" entityID="2"/>' },
   { name: 'not xml', body: 'not xml' },
+  // recoverable for the parser (the reference is kept as text), but not for a trust anchor
+  { name: 'undefined entity reference', body: metadataXml.replace('Q2VydDE=', '&certificate;') },
 ])('resolve metadata with malformed xml: $name', async ({ body }) => {
   const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
     createFetchMock(metadataUrl, new Response(body)),
@@ -372,8 +396,11 @@ test('resolve metadata with missing entity id', async () => {
   expect(fetchMocks).toHaveLength(0);
 });
 
-test('resolve metadata with missing idp sso descriptor', async () => {
-  const xml = `<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${entityId}"><md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"/></md:EntityDescriptor>`;
+test.each<{ name: string; descriptor: string }>([
+  { name: 'sp sso descriptor only', descriptor: '<md:SPSSODescriptor/>' },
+  { name: 'idp sso descriptor within another namespace', descriptor: '<IDPSSODescriptor xmlns="urn:example"/>' },
+])('resolve metadata with missing idp sso descriptor: $name', async ({ descriptor }) => {
+  const xml = `<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${entityId}">${descriptor}</md:EntityDescriptor>`;
 
   const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
     createFetchMock(metadataUrl, new Response(xml)),

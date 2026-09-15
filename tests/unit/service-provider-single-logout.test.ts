@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { useFunctionMock } from '@chubbyts/chubbyts-function-mock/dist/function-mock';
 import type { IdpMetadata, IdpMetadataResolver } from '../../src/metadata';
 import type { SamlIdentity, SamlServiceProviderOptions } from '../../src/service-provider';
@@ -251,6 +251,35 @@ test('verify logout request issued long ago within clock tolerance', async () =>
   verifyMocks();
 });
 
+// the boundaries of the freshness window: within five minutes plus the clock tolerance, not in the future beyond it
+test.each<{ name: string; issueInstant: Date; accepted: boolean }>([
+  { name: 'at the future boundary', issueInstant: new Date('2026-01-01T00:01:00.000Z'), accepted: true },
+  { name: 'beyond the future boundary', issueInstant: new Date('2026-01-01T00:01:00.001Z'), accepted: false },
+  { name: 'within the age boundary', issueInstant: new Date('2025-12-31T23:54:00.001Z'), accepted: true },
+  { name: 'at the age boundary', issueInstant: new Date('2025-12-31T23:54:00.000Z'), accepted: false },
+])('verify logout request issued $name', async ({ issueInstant, accepted }) => {
+  vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') });
+
+  try {
+    const [samlServiceProvider, verifyMocks] = createServiceProvider(metadata, { ...options, clockTolerance: 60 });
+
+    const promise = samlServiceProvider.verifyLogoutRequest(createLogoutRequestQuery({ issueInstant }));
+
+    if (accepted) {
+      expect(await promise).toMatchObject({ id: '_logout-request-1' });
+    } else {
+      await expectInvalidSamlResponseError(
+        promise,
+        `Logout message issued at "${issueInstant.toISOString()}" is not within the last 300s`,
+      );
+    }
+
+    verifyMocks();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test('verify logout request without service provider single logout service url', async () => {
   const [samlServiceProvider, verifyMocks] = createServiceProvider(
     metadata,
@@ -319,6 +348,17 @@ test.each<{ name: string; query: string; message: string; cause?: boolean }>([
   {
     name: 'invalid xml',
     query: createRedirectQuery(keyMaterial, 'SAMLRequest', '<samlp:LogoutRequest'),
+    message: 'Cannot parse "SAMLRequest" parameter: invalid xml',
+    cause: true,
+  },
+  {
+    // recoverable for the parser (the reference is kept as text), but not for a signed message
+    name: 'undefined entity reference',
+    query: createRedirectQuery(
+      keyMaterial,
+      'SAMLRequest',
+      createLogoutRequestXml({ idpEntityId, destination: singleLogoutServiceUrl, nameId: '&user;' }),
+    ),
     message: 'Cannot parse "SAMLRequest" parameter: invalid xml',
     cause: true,
   },

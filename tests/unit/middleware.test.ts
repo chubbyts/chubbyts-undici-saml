@@ -170,10 +170,42 @@ test('without session with none navigation request', async () => {
   expect(handlerMocks).toHaveLength(0);
 });
 
-test('with saml response', async () => {
+// a body of unknown length (chunked transfer encoding): the size is only known while reading it
+const createChunkedBody = (chunk: string, count: number): ReadableStream<Uint8Array> => {
+  // oxlint-disable-next-line functional/no-let
+  let sent = 0;
+
+  return new ReadableStream<Uint8Array>({
+    pull: (controller): void => {
+      if (sent === count) {
+        controller.close();
+
+        return;
+      }
+
+      sent += 1;
+      controller.enqueue(new TextEncoder().encode(chunk));
+    },
+  });
+};
+
+test.each<{ name: string; body: BodyInit; headers?: Record<string, string> }>([
+  {
+    name: 'form body',
+    body: new URLSearchParams({ SAMLResponse: 'some-saml-response', RelayState: '/resource?key=value' }),
+  },
+  {
+    // the media type is matched case insensitively and without its parameters
+    name: 'chunked form body',
+    body: createChunkedBody('SAMLResponse=some-saml-response&RelayState=%2Fresource%3Fkey%3Dvalue', 1),
+    headers: { 'content-type': 'Application/X-WWW-Form-Urlencoded ; charset=utf-8' },
+  },
+])('with saml response: $name', async ({ body, headers }) => {
   const serverRequest = new ServerRequest('https://sp.example.com/saml/acs', {
     method: 'POST',
-    body: new URLSearchParams({ SAMLResponse: 'some-saml-response', RelayState: '/resource?key=value' }),
+    body,
+    headers,
+    duplex: 'half',
   });
 
   const cookie = 'saml-session=some-jwt; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=3600';
@@ -246,25 +278,6 @@ test.each<{ name: string; relayState: string | undefined }>([
   expect(handlerMocks).toHaveLength(0);
 });
 
-// a body of unknown length (chunked transfer encoding): the size is only known while reading it
-const createChunkedBody = (chunk: string, count: number): ReadableStream<Uint8Array> => {
-  // oxlint-disable-next-line functional/no-let
-  let sent = 0;
-
-  return new ReadableStream<Uint8Array>({
-    pull: (controller): void => {
-      if (sent === count) {
-        controller.close();
-
-        return;
-      }
-
-      sent += 1;
-      controller.enqueue(new TextEncoder().encode(chunk));
-    },
-  });
-};
-
 test.each<{ name: string; body: BodyInit; headers?: Record<string, string> }>([
   {
     name: 'by content length',
@@ -327,7 +340,22 @@ test.each<{ name: string; body: BodyInit | undefined; headers?: Record<string, s
   {
     name: 'with chunked form body',
     body: createChunkedBody('RelayState=%2Fresource', 1),
-    headers: { 'content-type': 'Application/X-WWW-Form-Urlencoded; charset=utf-8' },
+    headers: { 'content-type': 'Application/X-WWW-Form-Urlencoded ; charset=utf-8' },
+  },
+  {
+    name: 'with none form content type',
+    body: 'SAMLResponse=x',
+    headers: { 'content-type': 'text/plain' },
+  },
+  {
+    name: 'with content length equal to the maximum size',
+    body: 'RelayState=%2Fresource',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': String(MAX_SAML_RESPONSE_SIZE) },
+  },
+  {
+    name: 'with form body of the maximum size',
+    body: `RelayState=${'x'.repeat(MAX_SAML_RESPONSE_SIZE - 'RelayState='.length)}`,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
   },
   { name: 'without saml response parameter', body: new URLSearchParams({ RelayState: '/resource' }) },
   { name: 'with empty saml response parameter', body: new URLSearchParams({ SAMLResponse: '' }) },

@@ -27,6 +27,12 @@ test('create session with invalid secret: none string', () => {
   );
 });
 
+test('create session with secret of 32 characters', async () => {
+  const samlSession = createSamlSession({ secret: 'x'.repeat(32) });
+
+  expect(await samlSession.createCookie(identity)).toMatch(/^saml-session=/);
+});
+
 test('create session with invalid maxAge', () => {
   expect(() => createSamlSession({ secret, maxAge: -1 })).toThrow(
     'Invalid maxAge -1: must be a non-negative number of seconds',
@@ -46,6 +52,7 @@ test.each<{ name: string; cookieName: string }>([
 
 test.each<{ name: string; path: string }>([
   { name: 'relative', path: 'app' },
+  { name: 'relative with slash', path: 'app/path' },
   { name: 'whitespace', path: '/some path' },
   { name: 'semicolon', path: '/app;path' },
   { name: 'control character', path: '/app\u0000path' },
