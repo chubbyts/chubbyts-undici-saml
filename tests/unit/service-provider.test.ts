@@ -1,11 +1,13 @@
 import { Buffer } from 'node:buffer';
 import { inflateRawSync } from 'node:zlib';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { useFunctionMock } from '@chubbyts/chubbyts-function-mock/dist/function-mock';
+import { useObjectMock } from '@chubbyts/chubbyts-function-mock/dist/object-mock';
 import type { IdpMetadata, IdpMetadataResolver } from '../../src/metadata';
 import type { SamlServiceProviderOptions } from '../../src/service-provider';
 import { createSamlServiceProvider } from '../../src/service-provider';
 import { InvalidSamlResponseError } from '../../src/error';
+import type { SamlAssertionIdStore } from '../../src/assertion-id-store';
 import { createSamlResponse, generateIdpKeyMaterial } from '../helper';
 
 const idpEntityId = 'https://idp.example.com';
@@ -252,10 +254,12 @@ test('verify saml response with cached saml instance', async () => {
 
   const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, options);
 
+  // two responses (the same one again would be a replay), verified by the same saml instance
   const samlResponse = createSamlResponse(keyMaterial, responseOptions);
+  const otherSamlResponse = createSamlResponse(keyMaterial, responseOptions);
 
   expect((await samlServiceProvider.verifySamlResponse(samlResponse)).nameId).toBe('user@example.com');
-  expect((await samlServiceProvider.verifySamlResponse(samlResponse)).nameId).toBe('user@example.com');
+  expect((await samlServiceProvider.verifySamlResponse(otherSamlResponse)).nameId).toBe('user@example.com');
 
   expect(idpMetadataResolverMocks).toHaveLength(0);
 });
@@ -587,4 +591,123 @@ test('verify saml response with failing idp metadata resolver', async () => {
   await expect(samlServiceProvider.verifySamlResponse('bm90IHhtbA==')).rejects.toBe(error);
 
   expect(idpMetadataResolverMocks).toHaveLength(0);
+});
+
+test('verify saml response with replayed assertion', async () => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+    { parameters: [], return: Promise.resolve(metadata) },
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, options);
+
+  const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, assertionId: '_assertion-1' });
+
+  expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toMatchObject({ nameId: 'user@example.com' });
+
+  // the very same response again (and a fresh one carrying the same assertion id) is rejected
+  const error = await expectInvalidSamlResponseError(samlServiceProvider.verifySamlResponse(samlResponse));
+
+  expect(error.message).toBe('Replayed assertion "_assertion-1"');
+  expect(error.cause).toBeUndefined();
+
+  await expectInvalidSamlResponseError(
+    samlServiceProvider.verifySamlResponse(
+      createSamlResponse(keyMaterial, { ...responseOptions, assertionId: '_assertion-1' }),
+    ),
+  );
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});
+
+test.each<{
+  name: string;
+  responseOptions: Partial<Parameters<typeof createSamlResponse>[1]>;
+  clockTolerance: number | undefined;
+  expectedExpiresAt: number;
+}>([
+  {
+    name: 'subject confirmation NotOnOrAfter later than conditions NotOnOrAfter',
+    responseOptions: {
+      subjectConfirmationNotOnOrAfter: new Date('2026-01-01T00:10:00Z'),
+      conditionsNotOnOrAfter: new Date('2026-01-01T00:05:00Z'),
+    },
+    clockTolerance: undefined,
+    expectedExpiresAt: Date.parse('2026-01-01T00:10:00Z'),
+  },
+  {
+    name: 'conditions NotOnOrAfter later than subject confirmation NotOnOrAfter, with clock tolerance',
+    responseOptions: {
+      subjectConfirmationNotOnOrAfter: new Date('2026-01-01T00:05:00Z'),
+      conditionsNotOnOrAfter: new Date('2026-01-01T00:10:00Z'),
+    },
+    clockTolerance: 30,
+    expectedExpiresAt: Date.parse('2026-01-01T00:10:30Z'),
+  },
+])(
+  'verify saml response with custom assertion id store: $name',
+  async ({ responseOptions: notOnOrAfterOptions, clockTolerance, expectedExpiresAt }) => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') });
+
+    try {
+      const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+        { parameters: [], return: Promise.resolve(metadata) },
+        { parameters: [], return: Promise.resolve(metadata) },
+      ]);
+
+      const [assertionIdStore, assertionIdStoreMocks] = useObjectMock<SamlAssertionIdStore>([
+        { name: 'consume', parameters: ['_assertion-1', expectedExpiresAt], return: Promise.resolve(true) },
+        { name: 'consume', parameters: ['_assertion-1', expectedExpiresAt], return: Promise.resolve(false) },
+      ]);
+
+      const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, {
+        ...options,
+        clockTolerance,
+        assertionIdStore,
+      });
+
+      const samlResponse = createSamlResponse(keyMaterial, {
+        ...responseOptions,
+        ...notOnOrAfterOptions,
+        assertionId: '_assertion-1',
+      });
+
+      expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toMatchObject({ nameId: 'user@example.com' });
+
+      const error = await expectInvalidSamlResponseError(samlServiceProvider.verifySamlResponse(samlResponse));
+
+      expect(error.message).toBe('Replayed assertion "_assertion-1"');
+
+      expect(idpMetadataResolverMocks).toHaveLength(0);
+      expect(assertionIdStoreMocks).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test('verify saml response without NotOnOrAfter', async () => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const [assertionIdStore, assertionIdStoreMocks] = useObjectMock<SamlAssertionIdStore>([]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, { ...options, assertionIdStore });
+
+  // node-saml itself requires both NotOnOrAfter (subject confirmation and conditions): nothing gets remembered
+  const samlResponse = createSamlResponse(keyMaterial, {
+    ...responseOptions,
+    subjectConfirmationNotOnOrAfter: null,
+    conditionsNotOnOrAfter: null,
+  });
+
+  const error = await expectInvalidSamlResponseError(samlServiceProvider.verifySamlResponse(samlResponse));
+
+  expect(error.message).toBe("Error parsing NotOnOrAfter: 'undefined' is not a valid date");
+  expect(error.cause).toBeInstanceOf(Error);
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+  expect(assertionIdStoreMocks).toHaveLength(0);
 });

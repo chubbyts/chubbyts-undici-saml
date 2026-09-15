@@ -1,5 +1,7 @@
 import type { Profile } from '@node-saml/node-saml';
 import { SAML, ValidateInResponseTo } from '@node-saml/node-saml';
+import type { SamlAssertionIdStore } from './assertion-id-store.js';
+import { createInMemorySamlAssertionIdStore } from './assertion-id-store.js';
 import { InvalidSamlResponseError } from './error.js';
 import type { IdpMetadata, IdpMetadataResolver } from './metadata.js';
 import { assertNonNegative, isHttpUrl, isObject } from './util.js';
@@ -55,6 +57,7 @@ export type SamlServiceProviderOptions = {
   certificate?: string;
   signatureAlgorithm?: 'sha256' | 'sha512';
   decryptionKey?: string;
+  assertionIdStore?: SamlAssertionIdStore;
 };
 
 const VALIDATE_IN_RESPONSE_TO: Record<'never' | 'ifPresent' | 'always', ValidateInResponseTo> = {
@@ -91,18 +94,50 @@ const assertAuthnContext = (authnContext: AuthnContext): void => {
   }
 };
 
-// node-saml does not expose the authn context within the profile, but the parsed (xml2js) assertion:
-// { Assertion: { AuthnStatement: [{ AuthnContext: [{ AuthnContextClassRef: [{ _: '...' }] }] }] } }
-const resolveAuthnContextClassRef = (profile: Profile): string | undefined => {
-  const path = ['Assertion', 'AuthnStatement', 'AuthnContext', 'AuthnContextClassRef'];
-
-  const classRef = path.reduce<unknown>((node, name) => {
+// node-saml exposes the parsed (xml2js) assertion: child elements as arrays (the first one is taken), attributes within
+// "$" and text within "_", e.g. { Assertion: { $: { ID: '...' }, AuthnStatement: [{ AuthnContext: [{ ... }] }] } }
+const resolveAssertionNode = (profile: Profile, path: Array<string>): unknown => {
+  return path.reduce<unknown>((node, name) => {
     const child: unknown = isObject(node) ? node[name] : undefined;
 
     return Array.isArray(child) ? child[0] : child;
   }, profile.getAssertion?.());
+};
+
+const resolveAuthnContextClassRef = (profile: Profile): string | undefined => {
+  const classRef = resolveAssertionNode(profile, [
+    'Assertion',
+    'AuthnStatement',
+    'AuthnContext',
+    'AuthnContextClassRef',
+  ]);
 
   return isObject(classRef) && isNonEmptyString(classRef._) ? classRef._ : undefined;
+};
+
+const resolveNotOnOrAfter = (profile: Profile, path: Array<string>): number | undefined => {
+  const notOnOrAfter = resolveAssertionNode(profile, [...path, '$', 'NotOnOrAfter']);
+
+  // node-saml already rejected an unparsable date
+  return isNonEmptyString(notOnOrAfter) ? Date.parse(notOnOrAfter) : undefined;
+};
+
+// the id and the end of validity of the assertion: a bearer assertion must not be accepted twice (web browser sso
+// profile 4.1.4.5), and its id must be remembered as long as the assertion could still be valid, so the later of the
+// subject confirmation's and the conditions' NotOnOrAfter (the profile requires the former, node-saml neither)
+const resolveAssertionValidity = (profile: Profile): { id: string; notOnOrAfter: number } => {
+  const id = resolveAssertionNode(profile, ['Assertion', '$', 'ID']);
+
+  const notOnOrAfters = [
+    resolveNotOnOrAfter(profile, ['Assertion', 'Subject', 'SubjectConfirmation', 'SubjectConfirmationData']),
+    resolveNotOnOrAfter(profile, ['Assertion', 'Conditions']),
+  ].filter((notOnOrAfter) => notOnOrAfter !== undefined);
+
+  if (!isNonEmptyString(id) || notOnOrAfters.length === 0) {
+    throw new InvalidSamlResponseError('Missing ID or NotOnOrAfter within assertion');
+  }
+
+  return { id, notOnOrAfter: Math.max(...notOnOrAfters) };
 };
 
 const toSamlIdentity = (profile: Profile): SamlIdentity => {
@@ -134,7 +169,12 @@ export const createSamlServiceProvider = (
     );
   }
 
-  const { clockTolerance = 0, maxAssertionAge = 0, validateInResponseTo = 'never' } = options;
+  const {
+    clockTolerance = 0,
+    maxAssertionAge = 0,
+    validateInResponseTo = 'never',
+    assertionIdStore = createInMemorySamlAssertionIdStore(),
+  } = options;
 
   assertNonNegative('clockTolerance', clockTolerance);
   assertNonNegative('maxAssertionAge', maxAssertionAge);
@@ -241,6 +281,14 @@ export const createSamlServiceProvider = (
       throw new InvalidSamlResponseError(
         `Issuer mismatch: expected "${metadata.entityId}", given "${identity.issuer}"`,
       );
+    }
+
+    const { id, notOnOrAfter } = resolveAssertionValidity(profile);
+
+    // last, so that only an otherwise valid assertion consumes its id: the id is kept as long as the assertion would
+    // still be accepted (its NotOnOrAfter plus the clock tolerance)
+    if (!(await assertionIdStore.consume(id, notOnOrAfter + clockTolerance * 1000))) {
+      throw new InvalidSamlResponseError(`Replayed assertion "${id}"`);
     }
 
     return identity;

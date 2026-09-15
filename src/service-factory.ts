@@ -3,6 +3,7 @@ import type { ResolveConfig } from '@chubbyts/chubbyts-dic-config-factory/dist/d
 import { createAbstractFactory } from '@chubbyts/chubbyts-dic-config-factory/dist/dic-config-factory';
 import type { Logger } from '@chubbyts/chubbyts-log-types/dist/log';
 import type { Middleware } from '@chubbyts/chubbyts-undici-server/dist/server';
+import type { SamlAssertionIdStore } from './assertion-id-store.js';
 import type { IdpMetadataResolver } from './metadata.js';
 import { createIdpMetadataResolver } from './metadata.js';
 import { createSamlAuthenticationMiddleware } from './middleware.js';
@@ -39,6 +40,7 @@ export type SamlConfig = {
   certificate?: string;
   signatureAlgorithm?: 'sha256' | 'sha512';
   decryptionKey?: string;
+  assertionIdStore?: SamlAssertionIdStore;
   sessionMaxAge?: number;
   sessionCookieName?: string;
   sessionCookiePath?: string;
@@ -111,6 +113,7 @@ export const samlServiceProviderServiceFactory = createAbstractFactory(
       certificate,
       signatureAlgorithm,
       decryptionKey,
+      assertionIdStore,
     } = samlConfig;
 
     // a registered service wins over the shipped factory, so that any part can be replaced or shared between services
@@ -135,6 +138,7 @@ export const samlServiceProviderServiceFactory = createAbstractFactory(
       certificate,
       signatureAlgorithm,
       decryptionKey,
+      assertionIdStore,
     });
   },
 );

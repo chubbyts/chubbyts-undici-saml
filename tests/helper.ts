@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { randomUUID } from 'node:crypto';
 import selfsigned from 'selfsigned';
 import { SignedXml } from 'xml-crypto';
 
@@ -50,6 +51,7 @@ export type SamlResponseXmlOptions = {
   idpEntityId: string;
   spEntityId: string;
   assertionConsumerServiceUrl: string;
+  assertionId?: string;
   nameId?: string;
   sessionIndex?: string;
   authnContextClassRef?: string | null;
@@ -57,6 +59,9 @@ export type SamlResponseXmlOptions = {
   issueInstant?: Date;
   notBefore?: Date;
   notOnOrAfter?: Date;
+  // null omits the attribute, default: notOnOrAfter
+  subjectConfirmationNotOnOrAfter?: Date | null;
+  conditionsNotOnOrAfter?: Date | null;
   inResponseTo?: string;
   audience?: string;
   status?: string;
@@ -91,6 +96,7 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
     idpEntityId,
     spEntityId,
     assertionConsumerServiceUrl,
+    assertionId = `_assertion-${randomUUID()}`,
     nameId = 'user@example.com',
     sessionIndex,
     authnContextClassRef = 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
@@ -98,6 +104,8 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
     issueInstant = new Date(),
     notBefore = new Date(Date.now() - 60_000),
     notOnOrAfter = new Date(Date.now() + 300_000),
+    subjectConfirmationNotOnOrAfter = notOnOrAfter,
+    conditionsNotOnOrAfter = notOnOrAfter,
     inResponseTo,
     audience = spEntityId,
     status = 'urn:oasis:names:tc:SAML:2.0:status:Success',
@@ -117,7 +125,13 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
     )
     .join('');
 
-  const assertion = `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_assertion-1" Version="2.0" IssueInstant="${issueInstant.toISOString()}"><saml:Issuer>${idpEntityId}</saml:Issuer><saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">${nameId}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData NotOnOrAfter="${notOnOrAfter.toISOString()}" Recipient="${assertionConsumerServiceUrl}"${inResponseToAttribute}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="${notBefore.toISOString()}" NotOnOrAfter="${notOnOrAfter.toISOString()}"><saml:AudienceRestriction><saml:Audience>${audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="${issueInstant.toISOString()}"${
+  const subjectConfirmationNotOnOrAfterAttribute =
+    subjectConfirmationNotOnOrAfter !== null ? ` NotOnOrAfter="${subjectConfirmationNotOnOrAfter.toISOString()}"` : '';
+
+  const conditionsNotOnOrAfterAttribute =
+    conditionsNotOnOrAfter !== null ? ` NotOnOrAfter="${conditionsNotOnOrAfter.toISOString()}"` : '';
+
+  const assertion = `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}" Version="2.0" IssueInstant="${issueInstant.toISOString()}"><saml:Issuer>${idpEntityId}</saml:Issuer><saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">${nameId}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData${subjectConfirmationNotOnOrAfterAttribute} Recipient="${assertionConsumerServiceUrl}"${inResponseToAttribute}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="${notBefore.toISOString()}"${conditionsNotOnOrAfterAttribute}><saml:AudienceRestriction><saml:Audience>${audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="${issueInstant.toISOString()}"${
     sessionIndex !== undefined ? ` SessionIndex="${sessionIndex}"` : ''
   }>${
     authnContextClassRef !== null

@@ -11,6 +11,7 @@ import type * as metadata from '../../src/metadata';
 import type * as middleware from '../../src/middleware';
 import type * as serviceProvider from '../../src/service-provider';
 import type * as session from '../../src/session';
+import type { SamlAssertionIdStore } from '../../src/assertion-id-store';
 import type { IdpMetadataResolver } from '../../src/metadata';
 import { createIdpMetadataResolver } from '../../src/metadata';
 import { IdpMetadataError } from '../../src/error';
@@ -225,6 +226,7 @@ describe('samlServiceProviderServiceFactory', () => {
           certificate: undefined,
           signatureAlgorithm: undefined,
           decryptionKey: undefined,
+          assertionIdStore: undefined,
         },
       ],
     ]);
@@ -235,6 +237,8 @@ describe('samlServiceProviderServiceFactory', () => {
 
   test('with options, with registered samlIdpMetadataResolver', () => {
     const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([]);
+    // a plain object: an object mock is a proxy which must not be inspected (toStrictEqual would)
+    const assertionIdStore: SamlAssertionIdStore = { consume: async () => true };
 
     const [container, containerMocks] = useObjectMock<Container>([
       {
@@ -256,6 +260,7 @@ describe('samlServiceProviderServiceFactory', () => {
               certificate: 'some-certificate',
               signatureAlgorithm: 'sha512',
               decryptionKey: 'some-decryption-key',
+              assertionIdStore,
               maxAge: 1800,
             },
           },
@@ -287,6 +292,7 @@ describe('samlServiceProviderServiceFactory', () => {
           certificate: 'some-certificate',
           signatureAlgorithm: 'sha512',
           decryptionKey: 'some-decryption-key',
+          assertionIdStore,
         },
       ],
     ]);

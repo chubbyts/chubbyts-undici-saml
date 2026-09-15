@@ -146,6 +146,30 @@ test('login, assertion consumer service, authenticated request', async () => {
   });
 });
 
+test('with replayed saml response', async () => {
+  const middleware = createMiddleware();
+
+  const samlResponse = createSamlResponse(keyMaterial, {
+    idpEntityId,
+    spEntityId,
+    assertionConsumerServiceUrl,
+    signResponse: true,
+  });
+
+  const createRequest = (): ServerRequest =>
+    new ServerRequest('https://sp.example.com/saml/acs', {
+      method: 'POST',
+      body: new URLSearchParams({ SAMLResponse: samlResponse }),
+    });
+
+  expect((await middleware(createRequest(), handler)).status).toBe(303);
+
+  const response = await middleware(createRequest(), handler);
+
+  expect(response.status).toBe(403);
+  expect(await response.text()).toBe('The saml response is invalid or expired');
+});
+
 test('with invalid saml response', async () => {
   const middleware = createMiddleware();
 
