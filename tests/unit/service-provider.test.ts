@@ -827,3 +827,68 @@ test('verify saml response with undecryptable assertion and decryption key', asy
 
   expect(idpMetadataResolverMocks).toHaveLength(0);
 });
+
+test.each<{
+  name: string;
+  authnContext: SamlServiceProviderOptions['authnContext'];
+  authnContextClassRef: string | null;
+  message?: string;
+}>([
+  {
+    name: 'exact with a requested class',
+    authnContext: {
+      classRefs: [
+        'urn:oasis:names:tc:SAML:2.0:ac:classes:Kerberos',
+        'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
+      ],
+    },
+    authnContextClassRef: 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
+  },
+  {
+    name: 'minimum with another class',
+    authnContext: { classRefs: ['urn:oasis:names:tc:SAML:2.0:ac:classes:Kerberos'], comparison: 'minimum' },
+    authnContextClassRef: 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
+  },
+  {
+    name: 'exact with another class',
+    authnContext: { classRefs: ['urn:oasis:names:tc:SAML:2.0:ac:classes:Kerberos'], comparison: 'exact' },
+    authnContextClassRef: 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
+    message:
+      'Authentication context mismatch: expected one of "urn:oasis:names:tc:SAML:2.0:ac:classes:Kerberos", given "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport"',
+  },
+  {
+    name: 'exact without class',
+    authnContext: { classRefs: ['urn:oasis:names:tc:SAML:2.0:ac:classes:Kerberos'] },
+    authnContextClassRef: null,
+    message:
+      'Authentication context mismatch: expected one of "urn:oasis:names:tc:SAML:2.0:ac:classes:Kerberos", given "undefined"',
+  },
+])('verify saml response with authnContext: $name', async ({ authnContext, authnContextClassRef, message }) => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  // a rejected response must not consume its assertion id
+  const [assertionIdStore, assertionIdStoreMocks] = useObjectMock<SamlAssertionIdStore>([]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, {
+    ...options,
+    authnContext,
+    ...(message !== undefined ? { assertionIdStore } : {}),
+  });
+
+  // with an exact comparison the identity provider must have authenticated with one of the requested classes
+  const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, authnContextClassRef });
+
+  if (message === undefined) {
+    expect((await samlServiceProvider.verifySamlResponse(samlResponse)).nameId).toBe('user@example.com');
+  } else {
+    const error = await expectInvalidSamlResponseError(samlServiceProvider.verifySamlResponse(samlResponse));
+
+    expect(error.message).toBe(message);
+    expect(error.cause).toBeUndefined();
+  }
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+  expect(assertionIdStoreMocks).toHaveLength(0);
+});

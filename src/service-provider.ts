@@ -212,6 +212,23 @@ const assertRecipient = (profile: Profile, assertionConsumerServiceUrl: string):
   }
 };
 
+// with an exact comparison the identity provider must authenticate with one of the requested classes: an identity
+// provider ignoring the request (e.g. a password login instead of the requested multi factor class) must not be
+// trusted for a login it never performed. The other comparisons depend on an ordering only the identity provider knows
+const assertAuthnContextClassRef = (identity: SamlIdentity, authnContext: AuthnContext | undefined): void => {
+  if (authnContext === undefined || (authnContext.comparison ?? 'exact') !== 'exact') {
+    return;
+  }
+
+  if (identity.authnContextClassRef === undefined || !authnContext.classRefs.includes(identity.authnContextClassRef)) {
+    throw new InvalidSamlResponseError(
+      `Authentication context mismatch: expected one of ${quote(authnContext.classRefs)}, given "${String(
+        identity.authnContextClassRef,
+      )}"`,
+    );
+  }
+};
+
 const resolveNotOnOrAfter = (profile: Profile, path: Array<string>): number | undefined => {
   const notOnOrAfter = resolveAssertionNode(profile, [...path, '$', 'NotOnOrAfter']);
 
@@ -519,6 +536,8 @@ export const createSamlServiceProvider = (
     );
 
     assertRecipient(profile, options.assertionConsumerServiceUrl);
+
+    assertAuthnContextClassRef(identity, options.authnContext);
 
     const { id, notOnOrAfter } = resolveAssertionValidity(profile);
 
