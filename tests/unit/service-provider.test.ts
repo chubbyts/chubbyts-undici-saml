@@ -784,3 +784,46 @@ test('verify saml response with missing destination and disabled wantAuthnRespon
 
   expect(idpMetadataResolverMocks).toHaveLength(0);
 });
+
+test('verify saml response with encrypted assertion and without decryption key', async () => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, options);
+
+  // a configuration problem (the identity provider encrypts, the service provider cannot decrypt), not an invalid saml
+  // response: an internal failure instead of a 403
+  const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, encryptAssertion: true });
+
+  const error: unknown = await samlServiceProvider.verifySamlResponse(samlResponse).then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+
+  expect(error).toBeInstanceOf(Error);
+  expect(error).not.toBeInstanceOf(InvalidSamlResponseError);
+  expect((error as Error).message).toBe('Cannot verify the saml response: encrypted assertion without decryptionKey');
+  expect(((error as Error).cause as Error).message).toBe('No decryption key for encrypted SAML response');
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});
+
+test('verify saml response with undecryptable assertion and decryption key', async () => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, {
+    ...options,
+    decryptionKey: keyMaterial.privateKey,
+  });
+
+  const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, encryptAssertion: true });
+
+  const error = await expectInvalidSamlResponseError(samlServiceProvider.verifySamlResponse(samlResponse));
+
+  expect(error.cause).toBeInstanceOf(Error);
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});

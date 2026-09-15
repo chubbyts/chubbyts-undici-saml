@@ -136,6 +136,10 @@ const MAX_LOGOUT_MESSAGE_SIZE = 65_536;
 // NotOnOrAfter of a logout request is optional and a logout response has none)
 const MAX_LOGOUT_MESSAGE_AGE = 300;
 
+// the error node-saml throws for an encrypted assertion without a decryption key: a configuration problem (of the
+// service provider or the identity provider), not an invalid saml response
+const MISSING_DECRYPTION_KEY_MESSAGE = 'No decryption key for encrypted SAML response';
+
 type LogoutMessageType = 'SAMLRequest' | 'SAMLResponse';
 
 type LogoutMessage = {
@@ -478,8 +482,15 @@ export const createSamlServiceProvider = (
     try {
       result = await saml.validatePostResponseAsync({ SAMLResponse: samlResponse });
     } catch (error) {
-      // node-saml only throws about the given saml response here (malformed, wrong signature, expired, wrong
-      // issuer / audience, non success status, ...), the idp metadata got resolved before
+      // an encrypted assertion without a decryption key is a configuration problem, not an invalid saml response:
+      // rethrown as an internal failure (node-saml verifies the response signature before it tries to decrypt, so with
+      // wantAuthnResponseSigned the assertion is one of the trusted identity provider)
+      if (error instanceof Error && error.message === MISSING_DECRYPTION_KEY_MESSAGE) {
+        throw new Error('Cannot verify the saml response: encrypted assertion without decryptionKey', { cause: error });
+      }
+
+      // node-saml otherwise only throws about the given saml response here (malformed, wrong signature, expired,
+      // wrong issuer / audience, non success status, ...), the idp metadata got resolved before
       throw new InvalidSamlResponseError(error instanceof Error ? error.message : String(error), error);
     }
 

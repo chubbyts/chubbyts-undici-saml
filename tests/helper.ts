@@ -178,6 +178,8 @@ export type SamlResponseXmlOptions = {
   audience?: string;
   status?: string;
   includeAssertion?: boolean;
+  // an EncryptedAssertion (with dummy content) instead of the assertion
+  encryptAssertion?: boolean;
   signAssertion?: boolean;
   signResponse?: boolean;
 };
@@ -224,6 +226,7 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
     audience = spEntityId,
     status = 'urn:oasis:names:tc:SAML:2.0:status:Success',
     includeAssertion = true,
+    encryptAssertion = false,
     signAssertion = true,
     signResponse = false,
   } = options;
@@ -258,8 +261,14 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
     attributeStatements !== '' ? `<saml:AttributeStatement>${attributeStatements}</saml:AttributeStatement>` : ''
   }</saml:Assertion>`;
 
+  const assertionElement = encryptAssertion
+    ? '<saml:EncryptedAssertion><xenc:EncryptedData xmlns:xenc="http://www.w3.org/2001/04/xmlenc#"><xenc:CipherData><xenc:CipherValue>bm90IGVuY3J5cHRlZA==</xenc:CipherValue></xenc:CipherData></xenc:EncryptedData></saml:EncryptedAssertion>'
+    : signAssertion
+      ? signXml(keyMaterial, assertion, 'Assertion')
+      : assertion;
+
   const response = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_response-1" Version="2.0" IssueInstant="${issueInstant.toISOString()}"${destinationAttribute}${inResponseToAttribute}><saml:Issuer>${idpEntityId}</saml:Issuer><samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status>${
-    includeAssertion ? (signAssertion ? signXml(keyMaterial, assertion, 'Assertion') : assertion) : ''
+    includeAssertion ? assertionElement : ''
   }</samlp:Response>`;
 
   return signResponse ? signXml(keyMaterial, response, 'Response') : response;
