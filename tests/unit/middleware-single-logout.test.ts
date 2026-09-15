@@ -8,7 +8,7 @@ import { InvalidSamlResponseError } from '../../src/error';
 import type { SamlIdentity, SamlLogoutRequest, SamlServiceProvider } from '../../src/service-provider';
 import type { SamlSession } from '../../src/session';
 import type { SamlAuthenticationMiddlewarePaths } from '../../src/middleware';
-import { createSamlAuthenticationMiddleware } from '../../src/middleware';
+import { MAX_SAML_RESPONSE_SIZE, createSamlAuthenticationMiddleware } from '../../src/middleware';
 
 const paths: SamlAuthenticationMiddlewarePaths = {
   assertionConsumerServicePath: '/saml/acs',
@@ -418,6 +418,29 @@ test('with logout with session and without single logout', async () => {
   const response = await middleware(serverRequest, handler);
 
   expectRedirect(response, '/goodbye', removalCookie);
+
+  expect(samlSessionMocks).toHaveLength(0);
+  expect(samlServiceProviderMocks).toHaveLength(0);
+  expect(handlerMocks).toHaveLength(0);
+});
+
+test('with logout with too large body', async () => {
+  const serverRequest = new ServerRequest('https://sp.example.com/saml/slo', {
+    method: 'POST',
+    body: new URLSearchParams({ RelayState: `/${'x'.repeat(MAX_SAML_RESPONSE_SIZE)}` }),
+  });
+
+  const [samlSession, samlSessionMocks] = useObjectMock<SamlSession>([]);
+  const [samlServiceProvider, samlServiceProviderMocks] = useObjectMock<SamlServiceProvider>([]);
+  const [handler, handlerMocks] = useFunctionMock<Handler>([]);
+
+  const middleware = createSamlAuthenticationMiddleware(samlSession, samlServiceProvider, paths);
+
+  const response = await middleware(serverRequest, handler);
+
+  expect(response.status).toBe(413);
+  expect(response.statusText).toBe('Content Too Large');
+  expect(await response.text()).toBe('The request body exceeds the maximum size');
 
   expect(samlSessionMocks).toHaveLength(0);
   expect(samlServiceProviderMocks).toHaveLength(0);

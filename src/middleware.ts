@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import type { Logger } from '@chubbyts/chubbyts-log-types/dist/log';
 import { createLogger } from '@chubbyts/chubbyts-log-types/dist/log';
 import type { Handler, Middleware } from '@chubbyts/chubbyts-undici-server/dist/server';
@@ -35,8 +36,11 @@ const resolveRedirectTarget = (relayState: unknown): string => {
 
 // a real saml response is a few dozen kilobytes at most (even with an encrypted assertion and many attributes):
 // anything larger is not verified at all, since parsing and signature verification of an arbitrarily large, adversarial
-// xml document would exhaust cpu and memory (the assertion consumer service is reachable without authentication)
+// xml document would exhaust cpu and memory (the assertion consumer service is reachable without authentication). The
+// same limit bounds the form body of the logout post (reachable without authentication as well)
 export const MAX_SAML_RESPONSE_SIZE = 262_144;
+
+const FORM_MEDIA_TYPE = 'application/x-www-form-urlencoded';
 
 // responses which set, clear or depend on a session cookie must not be stored by any (shared) cache
 const NO_STORE_HEADERS = { 'cache-control': 'no-store' };
@@ -49,11 +53,46 @@ const createTextResponse = (status: number, statusText: string, body: string): R
   });
 };
 
-// the content length (if given) is checked before the body is read; a chunked body is bounded by the server in front
-const exceedsMaxSize = (request: ServerRequest): boolean => {
-  const contentLength = Number(request.headers.get('content-length') ?? 0);
+// the form body (http-post binding) read in a streaming way and bounded by size, since request.formData() would buffer
+// a body of any size (chunked, or with a lying content length) before anything could be checked, and the server in
+// front does not bound it either: undefined if the body exceeds the limit, an empty form if there is no (form) body
+const readFormBody = async (request: ServerRequest, maxSize: number): Promise<URLSearchParams | undefined> => {
+  // the content length (if given) is checked before anything is read
+  if (Number(request.headers.get('content-length') ?? 0) > maxSize) {
+    return undefined;
+  }
 
-  return !Number.isNaN(contentLength) && contentLength > MAX_SAML_RESPONSE_SIZE;
+  const mediaType = (request.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase();
+
+  if (mediaType !== FORM_MEDIA_TYPE || !request.body) {
+    return new URLSearchParams();
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Array<Uint8Array> = [];
+
+  // oxlint-disable-next-line functional/no-let
+  let size = 0;
+
+  // oxlint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      return new URLSearchParams(Buffer.concat(chunks).toString());
+    }
+
+    size += value.byteLength;
+
+    if (size > maxSize) {
+      await reader.cancel();
+
+      return undefined;
+    }
+
+    // oxlint-disable-next-line functional/immutable-data
+    chunks.push(value);
+  }
 };
 
 // the logout request names the principal and (optionally) the session to log out: only a matching session gets
@@ -113,20 +152,16 @@ export const createSamlAuthenticationMiddleware = (
   };
 
   const consumeSamlResponse = async (request: ServerRequest, url: URL): Promise<Response> => {
-    if (exceedsMaxSize(request)) {
+    const form = await readFormBody(request, MAX_SAML_RESPONSE_SIZE);
+
+    if (form === undefined) {
       return createTextResponse(413, 'Content Too Large', 'The saml response exceeds the maximum size');
     }
 
-    const formData = await request.formData().catch(() => undefined);
+    const samlResponse = form.get('SAMLResponse');
 
-    const samlResponse = formData?.get('SAMLResponse');
-
-    if (typeof samlResponse !== 'string' || samlResponse === '') {
+    if (samlResponse === null || samlResponse === '') {
       return createTextResponse(400, 'Bad Request', 'Missing "SAMLResponse" parameter');
-    }
-
-    if (samlResponse.length > MAX_SAML_RESPONSE_SIZE) {
-      return createTextResponse(413, 'Content Too Large', 'The saml response exceeds the maximum size');
     }
 
     // oxlint-disable-next-line functional/no-let
@@ -139,7 +174,7 @@ export const createSamlAuthenticationMiddleware = (
     }
 
     return createRedirectResponse(
-      resolveRedirectTarget(formData?.get('RelayState')),
+      resolveRedirectTarget(form.get('RelayState')),
       await samlSession.createCookie(identity),
     );
   };
@@ -191,9 +226,13 @@ export const createSamlAuthenticationMiddleware = (
   // relay state if single logout is not available. A POST (not a GET) on purpose: with the SameSite=Lax cookie a
   // cross-site request carries no session, so another site cannot log the user out
   const initiateLogout = async (request: ServerRequest): Promise<Response> => {
-    const formData = await request.formData().catch(() => undefined);
+    const form = await readFormBody(request, MAX_SAML_RESPONSE_SIZE);
 
-    const relayState = resolveRedirectTarget(formData?.get('RelayState'));
+    if (form === undefined) {
+      return createTextResponse(413, 'Content Too Large', 'The request body exceeds the maximum size');
+    }
+
+    const relayState = resolveRedirectTarget(form.get('RelayState'));
 
     const identity = await samlSession.resolveIdentity(request);
 

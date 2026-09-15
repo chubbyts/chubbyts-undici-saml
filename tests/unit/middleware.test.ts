@@ -246,6 +246,25 @@ test.each<{ name: string; relayState: string | undefined }>([
   expect(handlerMocks).toHaveLength(0);
 });
 
+// a body of unknown length (chunked transfer encoding): the size is only known while reading it
+const createChunkedBody = (chunk: string, count: number): ReadableStream<Uint8Array> => {
+  // oxlint-disable-next-line functional/no-let
+  let sent = 0;
+
+  return new ReadableStream<Uint8Array>({
+    pull: (controller): void => {
+      if (sent === count) {
+        controller.close();
+
+        return;
+      }
+
+      sent += 1;
+      controller.enqueue(new TextEncoder().encode(chunk));
+    },
+  });
+};
+
 test.each<{ name: string; body: BodyInit; headers?: Record<string, string> }>([
   {
     name: 'by content length',
@@ -259,8 +278,18 @@ test.each<{ name: string; body: BodyInit; headers?: Record<string, string> }>([
     name: 'by saml response parameter',
     body: new URLSearchParams({ SAMLResponse: 'x'.repeat(MAX_SAML_RESPONSE_SIZE + 1) }),
   },
+  {
+    name: 'by chunked body',
+    body: createChunkedBody(`SAMLResponse=${'x'.repeat(65_536)}`, 5),
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  },
 ])('with too large saml response: $name', async ({ body, headers }) => {
-  const serverRequest = new ServerRequest('https://sp.example.com/saml/acs', { method: 'POST', body, headers });
+  const serverRequest = new ServerRequest('https://sp.example.com/saml/acs', {
+    method: 'POST',
+    body,
+    headers,
+    duplex: 'half',
+  });
 
   const [samlSession, samlSessionMocks] = useObjectMock<SamlSession>([]);
   const [samlServiceProvider, samlServiceProviderMocks] = useObjectMock<SamlServiceProvider>([]);
@@ -286,14 +315,29 @@ test.each<{ name: string; body: BodyInit; headers?: Record<string, string> }>([
 test.each<{ name: string; body: BodyInit | undefined; headers?: Record<string, string> }>([
   { name: 'without body', body: undefined },
   {
+    name: 'without body and with form content type',
+    body: undefined,
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  },
+  {
     name: 'with none form body',
     body: JSON.stringify({ key: 'value' }),
     headers: { 'content-type': 'application/json' },
   },
+  {
+    name: 'with chunked form body',
+    body: createChunkedBody('RelayState=%2Fresource', 1),
+    headers: { 'content-type': 'Application/X-WWW-Form-Urlencoded; charset=utf-8' },
+  },
   { name: 'without saml response parameter', body: new URLSearchParams({ RelayState: '/resource' }) },
   { name: 'with empty saml response parameter', body: new URLSearchParams({ SAMLResponse: '' }) },
 ])('with missing saml response: $name', async ({ body, headers }) => {
-  const serverRequest = new ServerRequest('https://sp.example.com/saml/acs', { method: 'POST', body, headers });
+  const serverRequest = new ServerRequest('https://sp.example.com/saml/acs', {
+    method: 'POST',
+    body,
+    headers,
+    duplex: 'half',
+  });
 
   const [samlSession, samlSessionMocks] = useObjectMock<SamlSession>([]);
   const [samlServiceProvider, samlServiceProviderMocks] = useObjectMock<SamlServiceProvider>([]);
