@@ -3,13 +3,23 @@ import { createLogger } from '@chubbyts/chubbyts-log-types/dist/log';
 import type { Handler, Middleware } from '@chubbyts/chubbyts-undici-server/dist/server';
 import { Response, ServerRequest } from '@chubbyts/chubbyts-undici-server/dist/server';
 import { InvalidSamlResponseError } from './error.js';
-import type { SamlIdentity, SamlServiceProvider } from './service-provider.js';
+import type { SamlIdentity, SamlLogoutRequest, SamlServiceProvider } from './service-provider.js';
 import type { SamlSession } from './session.js';
 
 export type SamlAttributes = {
   saml: {
     identity: SamlIdentity;
   };
+};
+
+/**
+ * The paths handled by the middleware: the assertion consumer service (saml responses posted by the identity
+ * provider) and optionally the single logout service (logout requests and responses of the identity provider via the
+ * http-redirect binding, and a `POST` to start a service provider initiated logout).
+ */
+export type SamlAuthenticationMiddlewarePaths = {
+  assertionConsumerServicePath: string;
+  singleLogoutServicePath?: string;
 };
 
 // only a same-origin absolute path is followed after login: anything else within the relay state (absolute urls,
@@ -46,15 +56,61 @@ const exceedsMaxSize = (request: ServerRequest): boolean => {
   return !Number.isNaN(contentLength) && contentLength > MAX_SAML_RESPONSE_SIZE;
 };
 
+// the logout request names the principal and (optionally) the session to log out: only a matching session gets
+// terminated, another session within the same browser is left alone and the identity provider gets a failure response
+const matchesSession = (identity: SamlIdentity, logoutRequest: SamlLogoutRequest): boolean => {
+  return (
+    identity.nameId === logoutRequest.nameId &&
+    (logoutRequest.sessionIndex === undefined || identity.sessionIndex === logoutRequest.sessionIndex)
+  );
+};
+
+const createRedirectResponse = (location: string, cookie?: string): Response => {
+  return new Response(undefined, {
+    status: 303,
+    statusText: 'See Other',
+    headers: { ...NO_STORE_HEADERS, location, ...(cookie !== undefined ? { 'set-cookie': cookie } : {}) },
+  });
+};
+
 export const createSamlAuthenticationMiddleware = (
   samlSession: SamlSession,
   samlServiceProvider: SamlServiceProvider,
-  assertionConsumerServicePath: string,
+  paths: string | SamlAuthenticationMiddlewarePaths,
   logger: Logger = createLogger(),
 ): Middleware => {
+  const { assertionConsumerServicePath, singleLogoutServicePath } =
+    typeof paths === 'string' ? { assertionConsumerServicePath: paths, singleLogoutServicePath: undefined } : paths;
+
   if (!assertionConsumerServicePath.startsWith('/')) {
     throw new Error(`Invalid assertionConsumerServicePath "${assertionConsumerServicePath}": must start with "/"`);
   }
+
+  if (singleLogoutServicePath !== undefined && !singleLogoutServicePath.startsWith('/')) {
+    throw new Error(`Invalid singleLogoutServicePath "${singleLogoutServicePath}": must start with "/"`);
+  }
+
+  if (singleLogoutServicePath === assertionConsumerServicePath) {
+    throw new Error(
+      `Invalid singleLogoutServicePath "${singleLogoutServicePath}": must differ from the assertionConsumerServicePath`,
+    );
+  }
+
+  // an invalid saml message is answered with a 403, anything else (unreachable identity provider, ...) is rethrown
+  const forbid = (request: ServerRequest, url: URL, name: string, error: unknown): Response => {
+    if (!(error instanceof InvalidSamlResponseError)) {
+      throw error;
+    }
+
+    logger.info(`Invalid ${name}`, {
+      method: request.method,
+      pathname: url.pathname,
+      error: { name: error.name, message: error.message, cause: error.cause },
+    });
+
+    // do not reflect the verification error to the client: it may leak internal details (entity ids, ...)
+    return createTextResponse(403, 'Forbidden', `The ${name} is invalid or expired`);
+  };
 
   const consumeSamlResponse = async (request: ServerRequest, url: URL): Promise<Response> => {
     if (exceedsMaxSize(request)) {
@@ -79,29 +135,71 @@ export const createSamlAuthenticationMiddleware = (
     try {
       identity = await samlServiceProvider.verifySamlResponse(samlResponse);
     } catch (error) {
-      if (!(error instanceof InvalidSamlResponseError)) {
-        throw error;
-      }
-
-      logger.info('Invalid saml response', {
-        method: request.method,
-        pathname: url.pathname,
-        error: { name: error.name, message: error.message, cause: error.cause },
-      });
-
-      // do not reflect the verification error to the client: it may leak internal details (entity ids, ...)
-      return createTextResponse(403, 'Forbidden', 'The saml response is invalid or expired');
+      return forbid(request, url, 'saml response', error);
     }
 
-    return new Response(undefined, {
-      status: 303,
-      statusText: 'See Other',
-      headers: {
-        ...NO_STORE_HEADERS,
-        location: resolveRedirectTarget(formData?.get('RelayState')),
-        'set-cookie': await samlSession.createCookie(identity),
-      },
-    });
+    return createRedirectResponse(
+      resolveRedirectTarget(formData?.get('RelayState')),
+      await samlSession.createCookie(identity),
+    );
+  };
+
+  // identity provider initiated single logout: the identity provider sends a logout request (http-redirect binding),
+  // the matching session gets removed and the browser is sent back with a logout response
+  const consumeLogoutRequest = async (request: ServerRequest, url: URL): Promise<Response> => {
+    // oxlint-disable-next-line functional/no-let
+    let logoutRequest: SamlLogoutRequest;
+
+    try {
+      logoutRequest = await samlServiceProvider.verifyLogoutRequest(url.search.slice(1));
+    } catch (error) {
+      return forbid(request, url, 'saml logout request', error);
+    }
+
+    const identity = await samlSession.resolveIdentity(request);
+
+    // without a session there is nothing left to log out (already logged out, expired): still a success
+    const success = identity === undefined || matchesSession(identity, logoutRequest);
+
+    // the relay state is the identity provider's own and goes back to it as is
+    const location = await samlServiceProvider.resolveLogoutResponseUrl(
+      logoutRequest,
+      url.searchParams.get('RelayState') ?? undefined,
+      success,
+    );
+
+    return createRedirectResponse(location, success ? samlSession.createRemovalCookie() : undefined);
+  };
+
+  // the identity provider's answer to a service provider initiated single logout: the session got removed when the
+  // logout started, so the browser is only sent on to the relay state
+  const consumeLogoutResponse = async (request: ServerRequest, url: URL): Promise<Response> => {
+    try {
+      await samlServiceProvider.verifyLogoutResponse(url.search.slice(1));
+    } catch (error) {
+      return forbid(request, url, 'saml logout response', error);
+    }
+
+    return createRedirectResponse(
+      resolveRedirectTarget(url.searchParams.get('RelayState')),
+      samlSession.createRemovalCookie(),
+    );
+  };
+
+  // service provider initiated single logout: the session gets removed right away (the local logout must not depend on
+  // the identity provider) and the browser is sent to the identity provider with a logout request, or straight to the
+  // relay state if single logout is not available. A POST (not a GET) on purpose: with the SameSite=Lax cookie a
+  // cross-site request carries no session, so another site cannot log the user out
+  const initiateLogout = async (request: ServerRequest): Promise<Response> => {
+    const formData = await request.formData().catch(() => undefined);
+
+    const relayState = resolveRedirectTarget(formData?.get('RelayState'));
+
+    const identity = await samlSession.resolveIdentity(request);
+
+    const location = identity ? await samlServiceProvider.resolveLogoutUrl(identity, relayState) : undefined;
+
+    return createRedirectResponse(location ?? relayState, samlSession.createRemovalCookie());
   };
 
   return async (request: ServerRequest, handler: Handler): Promise<Response> => {
@@ -109,6 +207,20 @@ export const createSamlAuthenticationMiddleware = (
 
     if (url.pathname === assertionConsumerServicePath && request.method === 'POST') {
       return consumeSamlResponse(request, url);
+    }
+
+    if (url.pathname === singleLogoutServicePath) {
+      if (request.method === 'GET' && url.searchParams.has('SAMLRequest')) {
+        return consumeLogoutRequest(request, url);
+      }
+
+      if (request.method === 'GET' && url.searchParams.has('SAMLResponse')) {
+        return consumeLogoutResponse(request, url);
+      }
+
+      if (request.method === 'POST') {
+        return initiateLogout(request);
+      }
     }
 
     const identity = await samlSession.resolveIdentity(request);

@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { randomUUID } from 'node:crypto';
+import { createSign, randomUUID } from 'node:crypto';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import selfsigned from 'selfsigned';
 import { SignedXml } from 'xml-crypto';
 
@@ -30,12 +31,14 @@ export type IdpMetadataXmlOptions = {
   entityId: string;
   certificates: Array<string>;
   singleSignOnServiceLocation: string;
+  singleLogoutServiceLocation?: string;
 };
 
 export const createIdpMetadataXml = ({
   entityId,
   certificates,
   singleSignOnServiceLocation,
+  singleLogoutServiceLocation,
 }: IdpMetadataXmlOptions): string => {
   const keyDescriptors = certificates
     .map(
@@ -44,7 +47,111 @@ export const createIdpMetadataXml = ({
     )
     .join('');
 
-  return `<?xml version="1.0" encoding="UTF-8"?><md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${entityId}"><md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">${keyDescriptors}<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${singleSignOnServiceLocation}"/><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${singleSignOnServiceLocation}"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
+  const singleLogoutServices =
+    singleLogoutServiceLocation !== undefined
+      ? `<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${singleLogoutServiceLocation}"/><md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${singleLogoutServiceLocation}"/>`
+      : '';
+
+  return `<?xml version="1.0" encoding="UTF-8"?><md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${entityId}"><md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">${keyDescriptors}${singleLogoutServices}<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${singleSignOnServiceLocation}"/><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${singleSignOnServiceLocation}"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
+};
+
+export type LogoutRequestXmlOptions = {
+  idpEntityId: string;
+  destination: string;
+  id?: string;
+  nameId?: string;
+  nameIdFormat?: string | null;
+  sessionIndex?: string;
+  issueInstant?: Date;
+  notOnOrAfter?: Date;
+};
+
+export const createLogoutRequestXml = (options: LogoutRequestXmlOptions): string => {
+  const {
+    idpEntityId,
+    destination,
+    id = '_logout-request-1',
+    nameId = 'user@example.com',
+    nameIdFormat = 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+    sessionIndex,
+    issueInstant = new Date(),
+    notOnOrAfter,
+  } = options;
+
+  return `<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${id}" Version="2.0" IssueInstant="${issueInstant.toISOString()}" Destination="${destination}"${
+    notOnOrAfter !== undefined ? ` NotOnOrAfter="${notOnOrAfter.toISOString()}"` : ''
+  }><saml:Issuer>${idpEntityId}</saml:Issuer><saml:NameID${nameIdFormat !== null ? ` Format="${nameIdFormat}"` : ''}>${nameId}</saml:NameID>${
+    sessionIndex !== undefined ? `<samlp:SessionIndex>${sessionIndex}</samlp:SessionIndex>` : ''
+  }</samlp:LogoutRequest>`;
+};
+
+export type LogoutResponseXmlOptions = {
+  idpEntityId: string;
+  destination: string;
+  id?: string;
+  inResponseTo?: string;
+  status?: string;
+};
+
+export const createLogoutResponseXml = (options: LogoutResponseXmlOptions): string => {
+  const {
+    idpEntityId,
+    destination,
+    id = '_logout-response-1',
+    inResponseTo,
+    status = 'urn:oasis:names:tc:SAML:2.0:status:Success',
+  } = options;
+
+  return `<samlp:LogoutResponse xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${id}" Version="2.0" IssueInstant="${new Date().toISOString()}" Destination="${destination}"${
+    inResponseTo !== undefined ? ` InResponseTo="${inResponseTo}"` : ''
+  }><saml:Issuer>${idpEntityId}</saml:Issuer><samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status></samlp:LogoutResponse>`;
+};
+
+export type RedirectQueryOptions = {
+  relayState?: string;
+  sign?: boolean;
+  sigAlg?: string;
+  hashAlgorithm?: string;
+  deflate?: boolean;
+};
+
+// the query of a http-redirect binding message: deflated, base64 and url encoded message, optional relay state and
+// (by default) a signature over the url encoded parameters as sent (the way an identity provider signs it)
+export const createRedirectQuery = (
+  keyMaterial: IdpKeyMaterial,
+  type: 'SAMLRequest' | 'SAMLResponse',
+  xml: string,
+  options: RedirectQueryOptions = {},
+): string => {
+  const {
+    relayState,
+    sign = true,
+    sigAlg = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+    hashAlgorithm = 'RSA-SHA256',
+    deflate = true,
+  } = options;
+
+  const message = (deflate ? deflateRawSync(Buffer.from(xml)) : Buffer.from(xml)).toString('base64');
+
+  const parameters = [
+    `${type}=${encodeURIComponent(message)}`,
+    ...(relayState !== undefined ? [`RelayState=${encodeURIComponent(relayState)}`] : []),
+  ];
+
+  if (!sign) {
+    return parameters.join('&');
+  }
+
+  const signedParameters = [...parameters, `SigAlg=${encodeURIComponent(sigAlg)}`].join('&');
+
+  const signature = createSign(hashAlgorithm).update(signedParameters).sign(keyMaterial.privateKey, 'base64');
+
+  return `${signedParameters}&Signature=${encodeURIComponent(signature)}`;
+};
+
+// the message within a http-redirect binding url created by the service provider
+export const inflateRedirectMessage = (url: URL, type: 'SAMLRequest' | 'SAMLResponse'): string => {
+  return inflateRawSync(Buffer.from(url.searchParams.get(type) as string, 'base64')).toString();
 };
 
 export type SamlResponseXmlOptions = {

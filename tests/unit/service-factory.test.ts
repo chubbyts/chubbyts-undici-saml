@@ -214,6 +214,7 @@ describe('samlServiceProviderServiceFactory', () => {
         {
           entityId: 'https://sp.example.com',
           assertionConsumerServiceUrl: 'https://sp.example.com/saml/acs',
+          singleLogoutServiceUrl: undefined,
           clockTolerance: undefined,
           maxAssertionAge: undefined,
           identifierFormat: undefined,
@@ -248,6 +249,7 @@ describe('samlServiceProviderServiceFactory', () => {
           chubbyts: {
             saml: {
               ...minimalSamlConfig,
+              singleLogoutServiceUrl: 'https://sp.example.com/saml/slo',
               clockTolerance: 5,
               maxAssertionAge: 300,
               identifierFormat: null,
@@ -280,6 +282,7 @@ describe('samlServiceProviderServiceFactory', () => {
         {
           entityId: 'https://sp.example.com',
           assertionConsumerServiceUrl: 'https://sp.example.com/saml/acs',
+          singleLogoutServiceUrl: 'https://sp.example.com/saml/slo',
           clockTolerance: 5,
           maxAssertionAge: 300,
           identifierFormat: null,
@@ -478,7 +481,7 @@ describe('samlAuthenticationMiddlewareServiceFactory', () => {
       [
         createSamlSessionMock.mock.results[0]?.value,
         createSamlServiceProviderMock.mock.results[0]?.value,
-        '/saml/acs',
+        { assertionConsumerServicePath: '/saml/acs' },
         undefined,
       ],
     ]);
@@ -496,7 +499,14 @@ describe('samlAuthenticationMiddlewareServiceFactory', () => {
       {
         name: 'get',
         parameters: ['config'],
-        return: { chubbyts: { saml: { assertionConsumerServiceUrl: 'https://sp.example.com/auth/saml/acs' } } },
+        return: {
+          chubbyts: {
+            saml: {
+              assertionConsumerServiceUrl: 'https://sp.example.com/auth/saml/acs',
+              singleLogoutServiceUrl: 'https://sp.example.com/auth/saml/slo',
+            },
+          },
+        },
       },
       { name: 'has', parameters: ['samlSession'], return: true },
       { name: 'get', parameters: ['samlSession'], return: samlSession },
@@ -517,7 +527,10 @@ describe('samlAuthenticationMiddlewareServiceFactory', () => {
     expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]).toHaveLength(4);
     expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[0]).toBe(samlSession);
     expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[1]).toBe(samlServiceProvider);
-    expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[2]).toBe('/auth/saml/acs');
+    expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[2]).toStrictEqual({
+      assertionConsumerServicePath: '/auth/saml/acs',
+      singleLogoutServicePath: '/auth/saml/slo',
+    });
     expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[3]).toBe(logger);
     expect(service).toBe(createSamlAuthenticationMiddlewareMock.mock.results[0]?.value);
 
@@ -551,7 +564,9 @@ describe('samlAuthenticationMiddlewareServiceFactory', () => {
     expect(createSamlAuthenticationMiddlewareMock.mock.calls).toHaveLength(1);
     expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[0]).toBe(samlSession);
     expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[1]).toBe(samlServiceProvider);
-    expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[2]).toBe('/partner/acs');
+    expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[2]).toStrictEqual({
+      assertionConsumerServicePath: '/partner/acs',
+    });
     expect(createSamlAuthenticationMiddlewareMock.mock.calls[0]?.[3]).toBeUndefined();
     expect(service).toBe(createSamlAuthenticationMiddlewareMock.mock.results[0]?.value);
 
@@ -611,7 +626,7 @@ describe('with container by config', () => {
       [
         container.get<SamlSession>('samlSession'),
         container.get<SamlServiceProvider>('samlServiceProvider'),
-        '/saml/acs',
+        { assertionConsumerServicePath: '/saml/acs' },
         undefined,
       ],
     ]);

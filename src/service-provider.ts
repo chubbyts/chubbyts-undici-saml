@@ -1,5 +1,9 @@
+import { Buffer } from 'node:buffer';
+import { inflateRawSync } from 'node:zlib';
 import type { Profile } from '@node-saml/node-saml';
 import { SAML, ValidateInResponseTo } from '@node-saml/node-saml';
+import { DOMParser, onErrorStopParsing } from '@xmldom/xmldom';
+import type { Element } from '@xmldom/xmldom';
 import type { SamlAssertionIdStore } from './assertion-id-store.js';
 import { createInMemorySamlAssertionIdStore } from './assertion-id-store.js';
 import { InvalidSamlResponseError } from './error.js';
@@ -21,13 +25,56 @@ export type SamlIdentity = {
   attributes: Record<string, unknown>;
 };
 
+/**
+ * A verified logout request of the identity provider (identity provider initiated single logout): the principal
+ * (`nameId`) and session (`sessionIndex`) to log out, and the request `id` the logout response refers to.
+ */
+export type SamlLogoutRequest = {
+  id: string;
+  nameId: string;
+  nameIdFormat?: string;
+  sessionIndex?: string;
+};
+
 export type LoginUrlResolver = (relayState: string) => Promise<string>;
 
 export type SamlResponseVerifier = (samlResponse: string) => Promise<SamlIdentity>;
 
+/**
+ * The url of the identity provider's single logout location carrying the logout request for the given identity
+ * (service provider initiated single logout), or `undefined` if the identity provider or the service provider has no
+ * single logout location: the logout then only ends the local session.
+ */
+export type LogoutUrlResolver = (identity: SamlIdentity, relayState: string) => Promise<string | undefined>;
+
+/**
+ * Verifies the logout request within the given query string (`SAMLRequest`, `RelayState`, `SigAlg`, `Signature` as
+ * received, http-redirect binding).
+ */
+export type LogoutRequestVerifier = (query: string) => Promise<SamlLogoutRequest>;
+
+/**
+ * The url of the identity provider's single logout location carrying the logout response to the given logout request.
+ */
+export type LogoutResponseUrlResolver = (
+  logoutRequest: SamlLogoutRequest,
+  relayState: string | undefined,
+  success: boolean,
+) => Promise<string>;
+
+/**
+ * Verifies the logout response within the given query string (`SAMLResponse`, `RelayState`, `SigAlg`, `Signature` as
+ * received, http-redirect binding).
+ */
+export type LogoutResponseVerifier = (query: string) => Promise<void>;
+
 export type SamlServiceProvider = {
   resolveLoginUrl: LoginUrlResolver;
   verifySamlResponse: SamlResponseVerifier;
+  resolveLogoutUrl: LogoutUrlResolver;
+  verifyLogoutRequest: LogoutRequestVerifier;
+  resolveLogoutResponseUrl: LogoutResponseUrlResolver;
+  verifyLogoutResponse: LogoutResponseVerifier;
 };
 
 export type AuthnContextComparison = 'exact' | 'minimum' | 'maximum' | 'better';
@@ -45,6 +92,7 @@ export type AuthnContext = {
 export type SamlServiceProviderOptions = {
   entityId: string;
   assertionConsumerServiceUrl: string;
+  singleLogoutServiceUrl?: string;
   clockTolerance?: number;
   maxAssertionAge?: number;
   identifierFormat?: string | null;
@@ -70,6 +118,26 @@ const AUTHN_CONTEXT_COMPARISONS: ReadonlyArray<string> = ['exact', 'minimum', 'm
 
 // sha1 is supported by node-saml, but deliberately not offered: it is broken for signatures
 const SIGNATURE_ALGORITHMS: ReadonlyArray<string> = ['sha256', 'sha512'];
+
+// the signature algorithms accepted within a signed http-redirect query (node-saml would accept any hash node knows)
+const SIGNATURE_ALGORITHM_URIS: ReadonlyArray<string> = [
+  'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+  'http://www.w3.org/2001/04/xmldsig-more#rsa-sha512',
+];
+
+const PROTOCOL_NAMESPACE = 'urn:oasis:names:tc:SAML:2.0:protocol';
+
+// a deflated logout message within a query is a few hundred bytes: bound the inflated size (an adversarial query could
+// otherwise inflate to megabytes before it is parsed)
+const MAX_LOGOUT_MESSAGE_SIZE = 65_536;
+
+type LogoutMessageType = 'SAMLRequest' | 'SAMLResponse';
+
+type LogoutMessage = {
+  // the signed parameters node-saml verifies the query signature for
+  container: Record<string, string>;
+  root: Element;
+};
 
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value !== '';
 
@@ -140,6 +208,77 @@ const resolveAssertionValidity = (profile: Profile): { id: string; notOnOrAfter:
   return { id, notOnOrAfter: Math.max(...notOnOrAfters) };
 };
 
+// the raw query as received: the signature covers the url encoded SAMLRequest / SAMLResponse, RelayState and SigAlg
+// parameters as sent by the identity provider, so node-saml verifies it against the original query string
+const parseLogoutMessage = (
+  query: string,
+  type: LogoutMessageType,
+  localName: 'LogoutRequest' | 'LogoutResponse',
+  destination: string,
+): LogoutMessage => {
+  const parameters = new URLSearchParams(query);
+
+  const message = parameters.get(type);
+  const sigAlg = parameters.get('SigAlg');
+  const signature = parameters.get('Signature');
+
+  if (!message) {
+    throw new InvalidSamlResponseError(`Missing "${type}" parameter`);
+  }
+
+  // an unsigned logout message must not log anyone out (or in): node-saml only verifies a signature if there is one
+  if (!sigAlg || !signature) {
+    throw new InvalidSamlResponseError('Missing "SigAlg" or "Signature" parameter: the logout message must be signed');
+  }
+
+  if (!SIGNATURE_ALGORITHM_URIS.includes(sigAlg)) {
+    throw new InvalidSamlResponseError(`Unsupported signature algorithm "${sigAlg}"`);
+  }
+
+  // oxlint-disable-next-line functional/no-let
+  let xml: string;
+
+  try {
+    xml = inflateRawSync(Buffer.from(message, 'base64'), { maxOutputLength: MAX_LOGOUT_MESSAGE_SIZE }).toString();
+  } catch (error) {
+    throw new InvalidSamlResponseError(`Cannot inflate "${type}" parameter`, error);
+  }
+
+  // oxlint-disable-next-line functional/no-let
+  let root: Element | null;
+
+  try {
+    root = new DOMParser({ onError: onErrorStopParsing }).parseFromString(xml, 'text/xml').documentElement;
+  } catch (error) {
+    throw new InvalidSamlResponseError(`Cannot parse "${type}" parameter: invalid xml`, error);
+  }
+
+  if (!root || root.namespaceURI !== PROTOCOL_NAMESPACE || root.localName !== localName) {
+    throw new InvalidSamlResponseError(`Missing ${localName} root element within "${type}" parameter`);
+  }
+
+  // a signed message must carry the url it was delivered to and the recipient must verify it (saml core 3.2.1):
+  // node-saml does not, so a logout message meant for another service provider is rejected here
+  const givenDestination = root.getAttribute('Destination');
+
+  if (givenDestination !== destination) {
+    throw new InvalidSamlResponseError(
+      `Destination mismatch: expected "${destination}", given "${String(givenDestination)}"`,
+    );
+  }
+
+  return { container: { [type]: message, SigAlg: sigAlg, Signature: signature }, root };
+};
+
+const toSamlLogoutRequest = (profile: Profile): SamlLogoutRequest => {
+  return {
+    id: profile.ID as string,
+    nameId: profile.nameID,
+    ...(profile.nameIDFormat !== undefined ? { nameIdFormat: profile.nameIDFormat } : {}),
+    ...(profile.sessionIndex !== undefined ? { sessionIndex: profile.sessionIndex } : {}),
+  };
+};
+
 const toSamlIdentity = (profile: Profile): SamlIdentity => {
   const authnContextClassRef = resolveAuthnContextClassRef(profile);
 
@@ -167,6 +306,20 @@ export const createSamlServiceProvider = (
     throw new Error(
       `Invalid assertionConsumerServiceUrl "${String(options.assertionConsumerServiceUrl)}": must be an absolute http(s) url`,
     );
+  }
+
+  if (options.singleLogoutServiceUrl !== undefined) {
+    if (!isHttpUrl(options.singleLogoutServiceUrl)) {
+      throw new Error(
+        `Invalid singleLogoutServiceUrl "${String(options.singleLogoutServiceUrl)}": must be an absolute http(s) url`,
+      );
+    }
+
+    // a logout request or response sent via the http-redirect binding must be signed (saml profiles 4.4.4.1), and an
+    // incoming one is only accepted if signed: without a key there is no single logout
+    if (options.privateKey === undefined) {
+      throw new Error('Invalid singleLogoutServiceUrl: requires privateKey (logout messages must be signed)');
+    }
   }
 
   const {
@@ -204,6 +357,7 @@ export const createSamlServiceProvider = (
       entryPoint: metadata.singleSignOnServiceUrl,
       issuer: options.entityId,
       callbackUrl: options.assertionConsumerServiceUrl,
+      ...(metadata.singleLogoutServiceUrl !== undefined ? { logoutUrl: metadata.singleLogoutServiceUrl } : {}),
       audience: options.entityId,
       acceptedClockSkewMs: clockTolerance * 1000,
       maxAssertionAgeMs: maxAssertionAge * 1000,
@@ -294,5 +448,102 @@ export const createSamlServiceProvider = (
     return identity;
   };
 
-  return { resolveLoginUrl, verifySamlResponse };
+  const resolveLogoutUrl = async (identity: SamlIdentity, relayState: string): Promise<string | undefined> => {
+    const { metadata, saml } = await resolveSaml();
+
+    // without a single logout location on either side the logout response could not be delivered: local logout only
+    if (options.singleLogoutServiceUrl === undefined || metadata.singleLogoutServiceUrl === undefined) {
+      return undefined;
+    }
+
+    return saml.getLogoutUrlAsync(
+      {
+        issuer: identity.issuer,
+        nameID: identity.nameId,
+        nameIDFormat: identity.nameIdFormat,
+        sessionIndex: identity.sessionIndex,
+      },
+      relayState,
+      {},
+    );
+  };
+
+  const resolveLogoutServiceUrl = (): string => {
+    if (options.singleLogoutServiceUrl === undefined) {
+      throw new Error('Single logout is not configured: missing singleLogoutServiceUrl');
+    }
+
+    return options.singleLogoutServiceUrl;
+  };
+
+  const verifyLogoutRequest = async (query: string): Promise<SamlLogoutRequest> => {
+    const singleLogoutServiceUrl = resolveLogoutServiceUrl();
+
+    const { metadata, saml } = await resolveSaml();
+
+    const { container } = parseLogoutMessage(query, 'SAMLRequest', 'LogoutRequest', singleLogoutServiceUrl);
+
+    // the logout response is sent to the single logout location of the metadata: without one there is nowhere to
+    // answer, and an identity provider not advertising single logout should not request it
+    if (metadata.singleLogoutServiceUrl === undefined) {
+      throw new InvalidSamlResponseError(
+        `Unexpected logout request: no single logout location within the idp metadata for entity id "${metadata.entityId}"`,
+      );
+    }
+
+    // oxlint-disable-next-line functional/no-let
+    let result: Awaited<ReturnType<SAML['validateRedirectAsync']>>;
+
+    try {
+      // node-saml verifies the query signature against the trusted certificates, the issuer and the validity period
+      result = await saml.validateRedirectAsync(container, query);
+    } catch (error) {
+      throw new InvalidSamlResponseError(error instanceof Error ? error.message : String(error), error);
+    }
+
+    return toSamlLogoutRequest(result.profile as Profile);
+  };
+
+  const resolveLogoutResponseUrl = async (
+    logoutRequest: SamlLogoutRequest,
+    relayState: string | undefined,
+    success: boolean,
+  ): Promise<string> => {
+    const { saml } = await resolveSaml();
+
+    // node-saml only needs the id of the logout request to answer (InResponseTo), the profile type wants more
+    const profile = { ID: logoutRequest.id, issuer: '', nameID: '', nameIDFormat: '' };
+
+    return saml.getLogoutResponseUrlAsync(profile, relayState ?? '', {}, success);
+  };
+
+  const verifyLogoutResponse = async (query: string): Promise<void> => {
+    const singleLogoutServiceUrl = resolveLogoutServiceUrl();
+
+    const { saml } = await resolveSaml();
+
+    const { container, root } = parseLogoutMessage(query, 'SAMLResponse', 'LogoutResponse', singleLogoutServiceUrl);
+
+    // node-saml only validates a given InResponseTo, never a missing one: with "always" an unsolicited logout
+    // response is rejected here
+    if (validateInResponseTo === 'always' && !root.getAttribute('InResponseTo')) {
+      throw new InvalidSamlResponseError('Missing InResponseTo within logout response');
+    }
+
+    try {
+      // node-saml verifies the status, the issuer, the query signature and (validateInResponseTo) the InResponseTo
+      await saml.validateRedirectAsync(container, query);
+    } catch (error) {
+      throw new InvalidSamlResponseError(error instanceof Error ? error.message : String(error), error);
+    }
+  };
+
+  return {
+    resolveLoginUrl,
+    verifySamlResponse,
+    resolveLogoutUrl,
+    verifyLogoutRequest,
+    resolveLogoutResponseUrl,
+    verifyLogoutResponse,
+  };
 };

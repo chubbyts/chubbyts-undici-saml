@@ -10,15 +10,27 @@ import type { SamlServiceProviderOptions } from '../../src/service-provider';
 import { createSamlServiceProvider } from '../../src/service-provider';
 import { createSamlSession } from '../../src/session';
 import type { IdpKeyMaterial } from '../helper';
-import { createIdpMetadataXml, createSamlResponse, generateIdpKeyMaterial } from '../helper';
+import {
+  createIdpMetadataXml,
+  createLogoutRequestXml,
+  createLogoutResponseXml,
+  createRedirectQuery,
+  createSamlResponse,
+  generateIdpKeyMaterial,
+  inflateRedirectMessage,
+} from '../helper';
 
 const idpEntityId = 'https://idp.example.com';
 const spEntityId = 'https://sp.example.com';
 const assertionConsumerServiceUrl = 'https://sp.example.com/saml/acs';
+const singleLogoutServiceUrl = 'https://sp.example.com/saml/slo';
 const sessionSecret = 'secret-secret-secret-secret-secret-secret';
 
 // oxlint-disable-next-line functional/no-let
 let keyMaterial: IdpKeyMaterial;
+
+// oxlint-disable-next-line functional/no-let
+let spKeyMaterial: IdpKeyMaterial;
 
 // oxlint-disable-next-line functional/no-let
 let server: Server;
@@ -29,8 +41,12 @@ let metadataUrl: string;
 // oxlint-disable-next-line functional/no-let
 let singleSignOnServiceUrl: string;
 
+// oxlint-disable-next-line functional/no-let
+let idpSingleLogoutServiceUrl: string;
+
 beforeAll(async () => {
   keyMaterial = await generateIdpKeyMaterial();
+  spKeyMaterial = await generateIdpKeyMaterial();
 
   server = createServer((request, response) => {
     if (request.url === '/metadata') {
@@ -40,6 +56,7 @@ beforeAll(async () => {
           entityId: idpEntityId,
           certificates: [keyMaterial.certificate],
           singleSignOnServiceLocation: singleSignOnServiceUrl,
+          singleLogoutServiceLocation: idpSingleLogoutServiceUrl,
         }),
       );
 
@@ -56,6 +73,7 @@ beforeAll(async () => {
 
   metadataUrl = `http://127.0.0.1:${port}/metadata`;
   singleSignOnServiceUrl = `http://127.0.0.1:${port}/sso`;
+  idpSingleLogoutServiceUrl = `http://127.0.0.1:${port}/slo`;
 });
 
 afterAll(async () => {
@@ -80,6 +98,43 @@ const createMiddleware = (options: Partial<SamlServiceProviderOptions> = {}): Mi
     }),
     '/saml/acs',
   );
+};
+
+const createSingleLogoutMiddleware = (): Middleware => {
+  return createSamlAuthenticationMiddleware(
+    createSamlSession({ secret: sessionSecret }),
+    createSamlServiceProvider(createIdpMetadataResolver(metadataUrl), {
+      entityId: spEntityId,
+      assertionConsumerServiceUrl,
+      singleLogoutServiceUrl,
+      privateKey: spKeyMaterial.privateKey,
+      certificate: spKeyMaterial.certificatePem,
+    }),
+    { assertionConsumerServicePath: '/saml/acs', singleLogoutServicePath: '/saml/slo' },
+  );
+};
+
+// the session cookie of a login through the assertion consumer service
+const login = async (middleware: Middleware, sessionIndex: string): Promise<string> => {
+  const response = await middleware(
+    new ServerRequest('https://sp.example.com/saml/acs', {
+      method: 'POST',
+      body: new URLSearchParams({
+        SAMLResponse: createSamlResponse(keyMaterial, {
+          idpEntityId,
+          spEntityId,
+          assertionConsumerServiceUrl,
+          sessionIndex,
+          signResponse: true,
+        }),
+      }),
+    }),
+    handler,
+  );
+
+  expect(response.status).toBe(303);
+
+  return (response.headers.get('set-cookie') as string).split(';')[0] as string;
 };
 
 test('login, assertion consumer service, authenticated request', async () => {
@@ -218,4 +273,146 @@ test('with unauthenticated none navigation request', async () => {
   );
 
   expect(response.status).toBe(401);
+});
+
+test('service provider initiated single logout', async () => {
+  const middleware = createSingleLogoutMiddleware();
+
+  const cookie = await login(middleware, '_session-1');
+
+  // 1. the logout removes the session and redirects to the identity provider with a signed logout request
+  const logoutResponse = await middleware(
+    new ServerRequest('https://sp.example.com/saml/slo', {
+      method: 'POST',
+      headers: { cookie },
+      body: new URLSearchParams({ RelayState: '/goodbye' }),
+    }),
+    handler,
+  );
+
+  expect(logoutResponse.status).toBe(303);
+  expect(logoutResponse.headers.get('set-cookie')).toBe(
+    'saml-session=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0',
+  );
+
+  const logoutUrl = new URL(logoutResponse.headers.get('location') as string);
+
+  expect(`${logoutUrl.origin}${logoutUrl.pathname}`).toBe(idpSingleLogoutServiceUrl);
+  expect(logoutUrl.searchParams.get('RelayState')).toBe('/goodbye');
+  expect(logoutUrl.searchParams.get('Signature')).not.toBeNull();
+
+  const logoutRequest = inflateRedirectMessage(logoutUrl, 'SAMLRequest');
+
+  expect(logoutRequest).toContain('<samlp:LogoutRequest');
+  expect(logoutRequest).toContain('>user@example.com</saml:NameID>');
+  expect(logoutRequest).toContain('>_session-1</saml2p:SessionIndex>');
+
+  const [, logoutRequestId] = /ID="([^"]+)"/.exec(logoutRequest) as RegExpExecArray;
+
+  // 2. the identity provider answers with a signed logout response, the browser gets sent to the relay state
+  const query = createRedirectQuery(
+    keyMaterial,
+    'SAMLResponse',
+    createLogoutResponseXml({ idpEntityId, destination: singleLogoutServiceUrl, inResponseTo: logoutRequestId }),
+    { relayState: logoutUrl.searchParams.get('RelayState') as string },
+  );
+
+  const logoutResponseResponse = await middleware(
+    new ServerRequest(`https://sp.example.com/saml/slo?${query}`),
+    handler,
+  );
+
+  expect(logoutResponseResponse.status).toBe(303);
+  expect(logoutResponseResponse.headers.get('location')).toBe('/goodbye');
+  expect(logoutResponseResponse.headers.get('set-cookie')).toBe(
+    'saml-session=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0',
+  );
+
+  // 3. without the session the request gets redirected to the identity provider again
+  const response = await middleware(new ServerRequest('https://sp.example.com/resource'), handler);
+
+  expect(response.status).toBe(302);
+});
+
+test('identity provider initiated single logout', async () => {
+  const middleware = createSingleLogoutMiddleware();
+
+  const cookie = await login(middleware, '_session-1');
+
+  // the identity provider sends a signed logout request for the session, the session gets removed and the browser is
+  // sent back to the identity provider with a signed logout response
+  const query = createRedirectQuery(
+    keyMaterial,
+    'SAMLRequest',
+    createLogoutRequestXml({ idpEntityId, destination: singleLogoutServiceUrl, sessionIndex: '_session-1' }),
+    { relayState: 'idp-relay-state' },
+  );
+
+  const response = await middleware(
+    new ServerRequest(`https://sp.example.com/saml/slo?${query}`, { headers: { cookie } }),
+    handler,
+  );
+
+  expect(response.status).toBe(303);
+  expect(response.headers.get('set-cookie')).toBe('saml-session=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0');
+
+  const logoutResponseUrl = new URL(response.headers.get('location') as string);
+
+  expect(`${logoutResponseUrl.origin}${logoutResponseUrl.pathname}`).toBe(idpSingleLogoutServiceUrl);
+  expect(logoutResponseUrl.searchParams.get('RelayState')).toBe('idp-relay-state');
+  expect(logoutResponseUrl.searchParams.get('Signature')).not.toBeNull();
+
+  const logoutResponse = inflateRedirectMessage(logoutResponseUrl, 'SAMLResponse');
+
+  expect(logoutResponse).toContain('<samlp:LogoutResponse');
+  expect(logoutResponse).toContain('InResponseTo="_logout-request-1"');
+  expect(logoutResponse).toContain('<samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>');
+});
+
+test('identity provider initiated single logout for another session', async () => {
+  const middleware = createSingleLogoutMiddleware();
+
+  const cookie = await login(middleware, '_session-1');
+
+  const query = createRedirectQuery(
+    keyMaterial,
+    'SAMLRequest',
+    createLogoutRequestXml({ idpEntityId, destination: singleLogoutServiceUrl, sessionIndex: '_session-2' }),
+  );
+
+  const response = await middleware(
+    new ServerRequest(`https://sp.example.com/saml/slo?${query}`, { headers: { cookie } }),
+    handler,
+  );
+
+  // the session is kept and the identity provider gets a failure response
+  expect(response.status).toBe(303);
+  expect(response.headers.get('set-cookie')).toBeNull();
+
+  const logoutResponse = inflateRedirectMessage(new URL(response.headers.get('location') as string), 'SAMLResponse');
+
+  expect(logoutResponse).toContain('<samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Requester">');
+
+  const authenticatedResponse = await middleware(
+    new ServerRequest('https://sp.example.com/resource', { headers: { cookie } }),
+    handler,
+  );
+
+  expect(authenticatedResponse.status).toBe(200);
+});
+
+test('with unsigned logout request', async () => {
+  const middleware = createSingleLogoutMiddleware();
+
+  const query = createRedirectQuery(
+    keyMaterial,
+    'SAMLRequest',
+    createLogoutRequestXml({ idpEntityId, destination: singleLogoutServiceUrl }),
+    { sign: false },
+  );
+
+  const response = await middleware(new ServerRequest(`https://sp.example.com/saml/slo?${query}`), handler);
+
+  expect(response.status).toBe(403);
+  expect(await response.text()).toBe('The saml logout request is invalid or expired');
 });

@@ -466,6 +466,90 @@ test.each<{ name: string; singleSignOnServices: string; given: string }>([
   expect(fetchMocks).toHaveLength(0);
 });
 
+test('resolve metadata with single logout location', async () => {
+  const xml = createIdpMetadataXml({
+    entityId,
+    certificates: ['Q2VydDE='],
+    singleSignOnServiceLocation,
+    singleLogoutServiceLocation: 'https://idp.example.com/slo',
+  });
+
+  const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
+    createFetchMock(metadataUrl, new Response(xml)),
+  ]);
+
+  const idpMetadataResolver = createIdpMetadataResolver(metadataUrl, { fetch });
+
+  expect(await idpMetadataResolver()).toEqual({ ...metadata, singleLogoutServiceUrl: 'https://idp.example.com/slo' });
+
+  expect(fetchMocks).toHaveLength(0);
+});
+
+test('resolve metadata with post binding single logout location only', async () => {
+  const xml = `<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${entityId}"><md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><md:KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>Q2VydDE=</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://idp.example.com/slo"/><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${singleSignOnServiceLocation}"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
+
+  const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
+    createFetchMock(metadataUrl, new Response(xml)),
+  ]);
+
+  const idpMetadataResolver = createIdpMetadataResolver(metadataUrl, { fetch });
+
+  expect(await idpMetadataResolver()).toEqual(metadata);
+
+  expect(fetchMocks).toHaveLength(0);
+});
+
+test.each<{ name: string; singleLogoutServices: string; given: string }>([
+  {
+    name: 'missing location',
+    singleLogoutServices: '<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"/>',
+    given: 'null',
+  },
+  {
+    name: 'relative location',
+    singleLogoutServices:
+      '<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="/slo"/>',
+    given: '/slo',
+  },
+])('resolve metadata with invalid single logout location: $name', async ({ singleLogoutServices, given }) => {
+  const xml = `<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${entityId}"><md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><md:KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>Q2VydDE=</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor>${singleLogoutServices}<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${singleSignOnServiceLocation}"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
+
+  const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
+    createFetchMock(metadataUrl, new Response(xml)),
+  ]);
+
+  const idpMetadataResolver = createIdpMetadataResolver(metadataUrl, { fetch });
+
+  await expectIdpMetadataError(
+    idpMetadataResolver(),
+    `Invalid http-redirect single logout location "${given}" for entity id "https://idp.example.com"`,
+  );
+
+  expect(fetchMocks).toHaveLength(0);
+});
+
+test('resolve metadata with https metadata url and http single logout location', async () => {
+  const insecureMetadataXml = createIdpMetadataXml({
+    entityId,
+    certificates: ['Q2VydDE='],
+    singleSignOnServiceLocation,
+    singleLogoutServiceLocation: 'http://idp.example.com/slo',
+  });
+
+  const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
+    createFetchMock(metadataUrl, new Response(insecureMetadataXml)),
+  ]);
+
+  const idpMetadataResolver = createIdpMetadataResolver(metadataUrl, { fetch });
+
+  await expectIdpMetadataError(
+    idpMetadataResolver(),
+    'Insecure single logout location "http://idp.example.com/slo" for https metadata url "https://idp.example.com/metadata"',
+  );
+
+  expect(fetchMocks).toHaveLength(0);
+});
+
 test('resolve metadata with https metadata url and http single sign-on location', async () => {
   const insecureMetadataXml = createIdpMetadataXml({
     entityId,
@@ -494,6 +578,7 @@ test('resolve metadata with http metadata url and http single sign-on location',
     entityId,
     certificates: ['Q2VydDE='],
     singleSignOnServiceLocation: 'http://idp.example.com/sso',
+    singleLogoutServiceLocation: 'http://idp.example.com/slo',
   });
 
   const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
@@ -502,7 +587,11 @@ test('resolve metadata with http metadata url and http single sign-on location',
 
   const idpMetadataResolver = createIdpMetadataResolver(httpMetadataUrl, { fetch });
 
-  expect(await idpMetadataResolver()).toEqual({ ...metadata, singleSignOnServiceUrl: 'http://idp.example.com/sso' });
+  expect(await idpMetadataResolver()).toEqual({
+    ...metadata,
+    singleSignOnServiceUrl: 'http://idp.example.com/sso',
+    singleLogoutServiceUrl: 'http://idp.example.com/slo',
+  });
 
   expect(fetchMocks).toHaveLength(0);
 });

@@ -1,7 +1,8 @@
 /**
- * Thrown by a saml response verifier if the given saml response itself is invalid (malformed, wrong signature,
- * expired, wrong issuer / audience, non success status, ...). Any other error thrown by a saml response verifier is
- * treated as an internal failure (unreachable idp metadata endpoint, ...) and gets rethrown by the middleware.
+ * Thrown by a saml response, logout request or logout response verifier if the given saml message itself is invalid
+ * (malformed, unsigned, wrong signature, expired, wrong issuer / audience / destination, non success status, ...).
+ * Any other error thrown by a verifier is treated as an internal failure (unreachable idp metadata endpoint, ...) and
+ * gets rethrown by the middleware.
  */
 export class InvalidSamlResponseError extends Error {
   public constructor(message: string, cause?: unknown) {

@@ -22,6 +22,7 @@ export type SamlConfig = {
   entityId: string;
   assertionConsumerServiceUrl: string;
   sessionSecret: string;
+  singleLogoutServiceUrl?: string;
   idpEntityId?: string;
   fetch?: typeof globalThis.fetch;
   maxAge?: number;
@@ -101,6 +102,7 @@ export const samlServiceProviderServiceFactory = createAbstractFactory(
     const assertionConsumerServiceUrl = resolveRequiredSamlConfig(samlConfig, name, 'assertionConsumerServiceUrl');
 
     const {
+      singleLogoutServiceUrl,
       clockTolerance,
       maxAssertionAge,
       identifierFormat,
@@ -126,6 +128,7 @@ export const samlServiceProviderServiceFactory = createAbstractFactory(
     return createSamlServiceProvider(idpMetadataResolver, {
       entityId,
       assertionConsumerServiceUrl,
+      singleLogoutServiceUrl,
       clockTolerance,
       maxAssertionAge,
       identifierFormat,
@@ -169,10 +172,17 @@ export const samlAuthenticationMiddlewareServiceFactory = createAbstractFactory(
 
     const assertionConsumerServiceUrl = resolveRequiredSamlConfig(samlConfig, name, 'assertionConsumerServiceUrl');
 
+    const { singleLogoutServiceUrl } = samlConfig;
+
     return createSamlAuthenticationMiddleware(
       resolveDependency(container, 'samlSession', samlSessionServiceFactory),
       resolveDependency(container, 'samlServiceProvider', samlServiceProviderServiceFactory),
-      new URL(assertionConsumerServiceUrl).pathname,
+      {
+        assertionConsumerServicePath: new URL(assertionConsumerServiceUrl).pathname,
+        ...(singleLogoutServiceUrl !== undefined
+          ? { singleLogoutServicePath: new URL(singleLogoutServiceUrl).pathname }
+          : {}),
+      },
       container.has('logger') ? container.get<Logger>('logger') : undefined,
     );
   },

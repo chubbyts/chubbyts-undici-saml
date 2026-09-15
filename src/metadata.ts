@@ -6,6 +6,7 @@ import { assertNonNegative, isHttpUrl } from './util.js';
 export type IdpMetadata = {
   entityId: string;
   singleSignOnServiceUrl: string;
+  singleLogoutServiceUrl?: string;
   signingCertificates: Array<string>;
 };
 
@@ -91,6 +92,13 @@ const parseXml = (metadataUrl: string, xml: string): Document => {
   }
 };
 
+// the http-redirect endpoint element (SingleSignOnService, SingleLogoutService) of the idp sso descriptor, if any
+const resolveHttpRedirectService = (idpSsoDescriptor: Element, localName: string): Element | undefined => {
+  return childElements(idpSsoDescriptor, METADATA_NAMESPACE, localName).find(
+    (service) => service.getAttribute('Binding') === HTTP_REDIRECT_BINDING,
+  );
+};
+
 const resolveSigningCertificates = (idpSsoDescriptor: Element): Array<string> => {
   return childElements(idpSsoDescriptor, METADATA_NAMESPACE, 'KeyDescriptor')
     .filter((keyDescriptor) => ['signing', null, ''].includes(keyDescriptor.getAttribute('use')))
@@ -118,6 +126,14 @@ export const createIdpMetadataResolver = (
   if (Number.isNaN(maxSize) || maxSize < 0) {
     throw new Error(`Invalid maxSize ${String(maxSize)}: must be a non-negative number of bytes`);
   }
+
+  // a https metadata url must not downgrade a redirect to the identity provider to plain http (credentials would be
+  // sent over an unprotected connection)
+  const assertSecureLocation = (name: string, location: string): void => {
+    if (isHttpsUrl(metadataUrl) && !isHttpsUrl(location)) {
+      throw new IdpMetadataError(`Insecure ${name} location "${location}" for https metadata url "${metadataUrl}"`);
+    }
+  };
 
   const parseMetadata = (xml: string): IdpMetadata => {
     const root = parseXml(metadataUrl, xml).documentElement as Element | null;
@@ -152,9 +168,9 @@ export const createIdpMetadataResolver = (
       throw new IdpMetadataError(`Missing signing certificate within idp metadata for entity id "${entityId}"`);
     }
 
-    const singleSignOnServiceUrl = childElements(idpSsoDescriptor, METADATA_NAMESPACE, 'SingleSignOnService')
-      .find((singleSignOnService) => singleSignOnService.getAttribute('Binding') === HTTP_REDIRECT_BINDING)
-      ?.getAttribute('Location');
+    const singleSignOnServiceUrl = resolveHttpRedirectService(idpSsoDescriptor, 'SingleSignOnService')?.getAttribute(
+      'Location',
+    );
 
     if (!isHttpUrl(singleSignOnServiceUrl)) {
       throw new IdpMetadataError(
@@ -164,15 +180,26 @@ export const createIdpMetadataResolver = (
       );
     }
 
-    // a https metadata url must not downgrade the login redirect to plain http (credentials would be sent over an
-    // unprotected connection)
-    if (isHttpsUrl(metadataUrl) && !isHttpsUrl(singleSignOnServiceUrl)) {
+    assertSecureLocation('single sign-on', singleSignOnServiceUrl);
+
+    // single logout is optional: without a http-redirect single logout location a logout only ends the local session
+    const singleLogoutService = resolveHttpRedirectService(idpSsoDescriptor, 'SingleLogoutService');
+
+    if (!singleLogoutService) {
+      return { entityId, singleSignOnServiceUrl, signingCertificates };
+    }
+
+    const singleLogoutServiceUrl = singleLogoutService.getAttribute('Location');
+
+    if (!isHttpUrl(singleLogoutServiceUrl)) {
       throw new IdpMetadataError(
-        `Insecure single sign-on location "${singleSignOnServiceUrl}" for https metadata url "${metadataUrl}"`,
+        `Invalid http-redirect single logout location "${describe(singleLogoutServiceUrl)}" for entity id "${entityId}"`,
       );
     }
 
-    return { entityId, singleSignOnServiceUrl, signingCertificates };
+    assertSecureLocation('single logout', singleLogoutServiceUrl);
+
+    return { entityId, singleSignOnServiceUrl, singleLogoutServiceUrl, signingCertificates };
   };
 
   // oxlint-disable-next-line functional/no-let

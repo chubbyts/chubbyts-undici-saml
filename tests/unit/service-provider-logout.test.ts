@@ -5,8 +5,9 @@ import type { IdpMetadata, IdpMetadataResolver } from '../../src/metadata';
 import { createSamlServiceProvider } from '../../src/service-provider';
 import { InvalidSamlResponseError } from '../../src/error';
 
-// node-saml resolves a logout response (single logout, out of scope of this package) with a null profile instead of
-// throwing: force that shape to prove it does not pass verification
+// node-saml resolves a logout response posted to the assertion consumer service with a null profile instead of
+// throwing: force that shape to prove it does not pass verification (a logout response belongs to the single logout
+// service path)
 vi.mock('@node-saml/node-saml', async (importOriginal) => {
   const original = await importOriginal<typeof nodeSaml>();
 
