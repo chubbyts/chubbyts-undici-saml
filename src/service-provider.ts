@@ -183,6 +183,26 @@ const resolveAuthnContextClassRef = (profile: Profile): string | undefined => {
   return isObject(classRef) && isNonEmptyString(classRef._) ? classRef._ : undefined;
 };
 
+// the bearer assertion must be addressed to the assertion consumer service it got delivered to (web browser sso
+// profile 4.1.4.5): node-saml does not verify the Recipient, so an assertion issued for another endpoint (of this or
+// another service provider sharing the entity id) is rejected here
+const assertRecipient = (profile: Profile, assertionConsumerServiceUrl: string): void => {
+  const recipient = resolveAssertionNode(profile, [
+    'Assertion',
+    'Subject',
+    'SubjectConfirmation',
+    'SubjectConfirmationData',
+    '$',
+    'Recipient',
+  ]);
+
+  if (recipient !== assertionConsumerServiceUrl) {
+    throw new InvalidSamlResponseError(
+      `Recipient mismatch: expected "${assertionConsumerServiceUrl}", given "${String(recipient)}"`,
+    );
+  }
+};
+
 const resolveNotOnOrAfter = (profile: Profile, path: Array<string>): number | undefined => {
   const notOnOrAfter = resolveAssertionNode(profile, [...path, '$', 'NotOnOrAfter']);
 
@@ -206,6 +226,40 @@ const resolveAssertionValidity = (profile: Profile): { id: string; notOnOrAfter:
   }
 
   return { id, notOnOrAfter: Math.max(...notOnOrAfters) };
+};
+
+// the root element of a saml protocol message (Response, LogoutRequest, LogoutResponse)
+const parseProtocolRoot = (xml: string, localName: string, source: string): Element => {
+  // oxlint-disable-next-line functional/no-let
+  let root: Element | null;
+
+  try {
+    root = new DOMParser({ onError: onErrorStopParsing }).parseFromString(xml, 'text/xml').documentElement;
+  } catch (error) {
+    throw new InvalidSamlResponseError(`Cannot parse ${source}: invalid xml`, error);
+  }
+
+  if (!root || root.namespaceURI !== PROTOCOL_NAMESPACE || root.localName !== localName) {
+    throw new InvalidSamlResponseError(`Missing ${localName} root element within ${source}`);
+  }
+
+  return root;
+};
+
+// a signed message must carry the url it was delivered to and the recipient must verify it (saml core 3.2.1, web
+// browser sso profile 4.1.4.5): node-saml does not, so a message meant for another endpoint is rejected here
+const assertDestination = (root: Element, destination: string, required: boolean): void => {
+  const givenDestination = root.getAttribute('Destination');
+
+  if (givenDestination === null && !required) {
+    return;
+  }
+
+  if (givenDestination !== destination) {
+    throw new InvalidSamlResponseError(
+      `Destination mismatch: expected "${destination}", given "${String(givenDestination)}"`,
+    );
+  }
 };
 
 // the raw query as received: the signature covers the url encoded SAMLRequest / SAMLResponse, RelayState and SigAlg
@@ -244,28 +298,9 @@ const parseLogoutMessage = (
     throw new InvalidSamlResponseError(`Cannot inflate "${type}" parameter`, error);
   }
 
-  // oxlint-disable-next-line functional/no-let
-  let root: Element | null;
+  const root = parseProtocolRoot(xml, localName, `"${type}" parameter`);
 
-  try {
-    root = new DOMParser({ onError: onErrorStopParsing }).parseFromString(xml, 'text/xml').documentElement;
-  } catch (error) {
-    throw new InvalidSamlResponseError(`Cannot parse "${type}" parameter: invalid xml`, error);
-  }
-
-  if (!root || root.namespaceURI !== PROTOCOL_NAMESPACE || root.localName !== localName) {
-    throw new InvalidSamlResponseError(`Missing ${localName} root element within "${type}" parameter`);
-  }
-
-  // a signed message must carry the url it was delivered to and the recipient must verify it (saml core 3.2.1):
-  // node-saml does not, so a logout message meant for another service provider is rejected here
-  const givenDestination = root.getAttribute('Destination');
-
-  if (givenDestination !== destination) {
-    throw new InvalidSamlResponseError(
-      `Destination mismatch: expected "${destination}", given "${String(givenDestination)}"`,
-    );
-  }
+  assertDestination(root, destination, true);
 
   return { container: { [type]: message, SigAlg: sigAlg, Signature: signature }, root };
 };
@@ -436,6 +471,16 @@ export const createSamlServiceProvider = (
         `Issuer mismatch: expected "${metadata.entityId}", given "${identity.issuer}"`,
       );
     }
+
+    // the destination of the (verified) response: a signed response must carry it, an unsigned one
+    // (wantAuthnResponseSigned: false) does not protect it anyway, so it is only checked if present
+    assertDestination(
+      parseProtocolRoot(profile.getSamlResponseXml?.() ?? '', 'Response', 'saml response'),
+      options.assertionConsumerServiceUrl,
+      options.wantAuthnResponseSigned !== false,
+    );
+
+    assertRecipient(profile, options.assertionConsumerServiceUrl);
 
     const { id, notOnOrAfter } = resolveAssertionValidity(profile);
 

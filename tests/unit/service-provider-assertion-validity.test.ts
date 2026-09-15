@@ -24,6 +24,8 @@ vi.mock('@node-saml/node-saml', async (importOriginal) => {
           nameID: 'user@example.com',
           nameIDFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
           getAssertion: () => assertion,
+          getSamlResponseXml: () =>
+            '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" Destination="https://sp.example.com/saml/acs"/>',
         },
         loggedOut: false,
       };
@@ -53,9 +55,14 @@ const createAssertion = (
         SubjectConfirmation: [
           {
             SubjectConfirmationData: [
-              subjectConfirmationNotOnOrAfter !== undefined
-                ? { $: { NotOnOrAfter: subjectConfirmationNotOnOrAfter } }
-                : {},
+              {
+                $: {
+                  Recipient: 'https://sp.example.com/saml/acs',
+                  ...(subjectConfirmationNotOnOrAfter !== undefined
+                    ? { NotOnOrAfter: subjectConfirmationNotOnOrAfter }
+                    : {}),
+                },
+              },
             ],
           },
         ],
@@ -110,12 +117,16 @@ test.each<{ name: string; assertion: Record<string, unknown>; expectedExpiresAt:
   expect(assertionIdStoreMocks).toHaveLength(0);
 });
 
-test.each<{ name: string; assertion: Record<string, unknown> }>([
+test.each<{ name: string; assertion: Record<string, unknown>; message?: string }>([
   { name: 'missing id', assertion: createAssertion(undefined, '2026-01-01T00:05:00Z', '2026-01-01T00:05:00Z') },
   { name: 'empty id', assertion: createAssertion('', '2026-01-01T00:05:00Z', '2026-01-01T00:05:00Z') },
   { name: 'missing NotOnOrAfter', assertion: createAssertion('_assertion-1', undefined, undefined) },
-  { name: 'missing assertion', assertion: {} },
-])('verify saml response with invalid assertion validity: $name', async ({ assertion: givenAssertion }) => {
+  {
+    name: 'missing assertion',
+    assertion: {},
+    message: 'Recipient mismatch: expected "https://sp.example.com/saml/acs", given "undefined"',
+  },
+])('verify saml response with invalid assertion validity: $name', async ({ assertion: givenAssertion, message }) => {
   assertion = givenAssertion;
 
   const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
@@ -127,7 +138,7 @@ test.each<{ name: string; assertion: Record<string, unknown> }>([
   const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, { ...options, assertionIdStore });
 
   await expect(samlServiceProvider.verifySamlResponse('some-saml-response')).rejects.toThrow(
-    new InvalidSamlResponseError('Missing ID or NotOnOrAfter within assertion'),
+    new InvalidSamlResponseError(message ?? 'Missing ID or NotOnOrAfter within assertion'),
   );
 
   expect(idpMetadataResolverMocks).toHaveLength(0);

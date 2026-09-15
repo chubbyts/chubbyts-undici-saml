@@ -711,3 +711,76 @@ test('verify saml response without NotOnOrAfter', async () => {
   expect(idpMetadataResolverMocks).toHaveLength(0);
   expect(assertionIdStoreMocks).toHaveLength(0);
 });
+
+test.each<{ name: string; responseOptions: Partial<Parameters<typeof createSamlResponse>[1]>; message: string }>([
+  {
+    name: 'wrong recipient',
+    responseOptions: { recipient: 'https://other-sp.example.com/saml/acs' },
+    message:
+      'Recipient mismatch: expected "https://sp.example.com/saml/acs", given "https://other-sp.example.com/saml/acs"',
+  },
+  {
+    name: 'missing recipient',
+    responseOptions: { recipient: null },
+    message: 'Recipient mismatch: expected "https://sp.example.com/saml/acs", given "undefined"',
+  },
+  {
+    name: 'wrong destination',
+    responseOptions: { destination: 'https://other-sp.example.com/saml/acs' },
+    message:
+      'Destination mismatch: expected "https://sp.example.com/saml/acs", given "https://other-sp.example.com/saml/acs"',
+  },
+  {
+    name: 'missing destination',
+    responseOptions: { destination: null },
+    message: 'Destination mismatch: expected "https://sp.example.com/saml/acs", given "null"',
+  },
+  {
+    name: 'wrong destination and disabled wantAuthnResponseSigned',
+    responseOptions: { destination: 'https://other-sp.example.com/saml/acs', signResponse: false },
+    message:
+      'Destination mismatch: expected "https://sp.example.com/saml/acs", given "https://other-sp.example.com/saml/acs"',
+  },
+])('verify saml response with wrong endpoint: $name', async ({ responseOptions: endpointOptions, message }) => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const [assertionIdStore, assertionIdStoreMocks] = useObjectMock<SamlAssertionIdStore>([]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, {
+    ...options,
+    wantAuthnResponseSigned: endpointOptions.signResponse ?? true,
+    assertionIdStore,
+  });
+
+  // node-saml verifies neither the Destination of the response nor the Recipient of the subject confirmation: an
+  // assertion issued for another assertion consumer service must not be accepted (and nothing gets remembered)
+  const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, ...endpointOptions });
+
+  const error = await expectInvalidSamlResponseError(samlServiceProvider.verifySamlResponse(samlResponse));
+
+  expect(error.message).toBe(message);
+  expect(error.cause).toBeUndefined();
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+  expect(assertionIdStoreMocks).toHaveLength(0);
+});
+
+test('verify saml response with missing destination and disabled wantAuthnResponseSigned', async () => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, {
+    ...options,
+    wantAuthnResponseSigned: false,
+  });
+
+  // only a signed response must carry the Destination (profiles 4.1.4.5), an unsigned one does not protect it anyway
+  const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, destination: null, signResponse: false });
+
+  expect((await samlServiceProvider.verifySamlResponse(samlResponse)).nameId).toBe('user@example.com');
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});

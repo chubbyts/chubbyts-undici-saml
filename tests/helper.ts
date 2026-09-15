@@ -169,6 +169,9 @@ export type SamlResponseXmlOptions = {
   // null omits the attribute, default: notOnOrAfter
   subjectConfirmationNotOnOrAfter?: Date | null;
   conditionsNotOnOrAfter?: Date | null;
+  // null omits the attribute, default: assertionConsumerServiceUrl
+  recipient?: string | null;
+  destination?: string | null;
   inResponseTo?: string;
   audience?: string;
   status?: string;
@@ -213,6 +216,8 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
     notOnOrAfter = new Date(Date.now() + 300_000),
     subjectConfirmationNotOnOrAfter = notOnOrAfter,
     conditionsNotOnOrAfter = notOnOrAfter,
+    recipient = assertionConsumerServiceUrl,
+    destination = assertionConsumerServiceUrl,
     inResponseTo,
     audience = spEntityId,
     status = 'urn:oasis:names:tc:SAML:2.0:status:Success',
@@ -238,7 +243,10 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
   const conditionsNotOnOrAfterAttribute =
     conditionsNotOnOrAfter !== null ? ` NotOnOrAfter="${conditionsNotOnOrAfter.toISOString()}"` : '';
 
-  const assertion = `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}" Version="2.0" IssueInstant="${issueInstant.toISOString()}"><saml:Issuer>${idpEntityId}</saml:Issuer><saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">${nameId}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData${subjectConfirmationNotOnOrAfterAttribute} Recipient="${assertionConsumerServiceUrl}"${inResponseToAttribute}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="${notBefore.toISOString()}"${conditionsNotOnOrAfterAttribute}><saml:AudienceRestriction><saml:Audience>${audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="${issueInstant.toISOString()}"${
+  const recipientAttribute = recipient !== null ? ` Recipient="${recipient}"` : '';
+  const destinationAttribute = destination !== null ? ` Destination="${destination}"` : '';
+
+  const assertion = `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}" Version="2.0" IssueInstant="${issueInstant.toISOString()}"><saml:Issuer>${idpEntityId}</saml:Issuer><saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">${nameId}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData${subjectConfirmationNotOnOrAfterAttribute}${recipientAttribute}${inResponseToAttribute}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="${notBefore.toISOString()}"${conditionsNotOnOrAfterAttribute}><saml:AudienceRestriction><saml:Audience>${audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="${issueInstant.toISOString()}"${
     sessionIndex !== undefined ? ` SessionIndex="${sessionIndex}"` : ''
   }>${
     authnContextClassRef !== null
@@ -248,7 +256,7 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
     attributeStatements !== '' ? `<saml:AttributeStatement>${attributeStatements}</saml:AttributeStatement>` : ''
   }</saml:Assertion>`;
 
-  const response = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_response-1" Version="2.0" IssueInstant="${issueInstant.toISOString()}" Destination="${assertionConsumerServiceUrl}"${inResponseToAttribute}><saml:Issuer>${idpEntityId}</saml:Issuer><samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status>${
+  const response = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_response-1" Version="2.0" IssueInstant="${issueInstant.toISOString()}"${destinationAttribute}${inResponseToAttribute}><saml:Issuer>${idpEntityId}</saml:Issuer><samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status>${
     includeAssertion ? (signAssertion ? signXml(keyMaterial, assertion, 'Assertion') : assertion) : ''
   }</samlp:Response>`;
 
