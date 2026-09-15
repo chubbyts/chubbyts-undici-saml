@@ -18,7 +18,7 @@ import { assertNonNegative, isHttpUrl, isObject } from './util.js';
  */
 export type SamlIdentity = {
   nameId: string;
-  nameIdFormat: string;
+  nameIdFormat?: string;
   sessionIndex?: string;
   authnContextClassRef?: string;
   issuer: string;
@@ -365,9 +365,10 @@ const toSamlLogoutRequest = (profile: Profile): SamlLogoutRequest => {
 const toSamlIdentity = (profile: Profile): SamlIdentity => {
   const authnContextClassRef = resolveAuthnContextClassRef(profile);
 
+  // node-saml types the name id format as required, but only sets it if the NameID carries a Format attribute
   return {
     nameId: profile.nameID,
-    nameIdFormat: profile.nameIDFormat,
+    ...(profile.nameIDFormat !== undefined ? { nameIdFormat: profile.nameIDFormat } : {}),
     ...(profile.sessionIndex !== undefined ? { sessionIndex: profile.sessionIndex } : {}),
     ...(authnContextClassRef !== undefined ? { authnContextClassRef } : {}),
     issuer: profile.issuer,
@@ -558,16 +559,16 @@ export const createSamlServiceProvider = (
       return undefined;
     }
 
-    return saml.getLogoutUrlAsync(
-      {
-        issuer: identity.issuer,
-        nameID: identity.nameId,
-        nameIDFormat: identity.nameIdFormat,
-        sessionIndex: identity.sessionIndex,
-      },
-      relayState,
-      {},
-    );
+    // node-saml types the name id format as required, but omits the Format attribute for an undefined one (the identity
+    // provider sent none, so none goes back)
+    const profile = {
+      issuer: identity.issuer,
+      nameID: identity.nameId,
+      nameIDFormat: identity.nameIdFormat,
+      sessionIndex: identity.sessionIndex,
+    } as Profile;
+
+    return saml.getLogoutUrlAsync(profile, relayState, {});
   };
 
   const resolveLogoutServiceUrl = (): string => {

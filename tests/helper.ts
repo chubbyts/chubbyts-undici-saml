@@ -162,6 +162,8 @@ export type SamlResponseXmlOptions = {
   assertionConsumerServiceUrl: string;
   assertionId?: string;
   nameId?: string;
+  // null omits the Format attribute
+  nameIdFormat?: string | null;
   sessionIndex?: string;
   authnContextClassRef?: string | null;
   attributes?: Record<string, Array<string>>;
@@ -212,6 +214,7 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
     assertionConsumerServiceUrl,
     assertionId = `_assertion-${randomUUID()}`,
     nameId = 'user@example.com',
+    nameIdFormat = 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
     sessionIndex,
     authnContextClassRef = 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
     attributes = {},
@@ -248,10 +251,11 @@ export const createSamlResponseXml = (keyMaterial: IdpKeyMaterial, options: Saml
   const conditionsNotOnOrAfterAttribute =
     conditionsNotOnOrAfter !== null ? ` NotOnOrAfter="${conditionsNotOnOrAfter.toISOString()}"` : '';
 
+  const nameIdFormatAttribute = nameIdFormat !== null ? ` Format="${nameIdFormat}"` : '';
   const recipientAttribute = recipient !== null ? ` Recipient="${recipient}"` : '';
   const destinationAttribute = destination !== null ? ` Destination="${destination}"` : '';
 
-  const assertion = `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}" Version="2.0" IssueInstant="${issueInstant.toISOString()}"><saml:Issuer>${idpEntityId}</saml:Issuer><saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">${nameId}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData${subjectConfirmationNotOnOrAfterAttribute}${recipientAttribute}${inResponseToAttribute}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="${notBefore.toISOString()}"${conditionsNotOnOrAfterAttribute}><saml:AudienceRestriction><saml:Audience>${audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="${issueInstant.toISOString()}"${
+  const assertion = `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}" Version="2.0" IssueInstant="${issueInstant.toISOString()}"><saml:Issuer>${idpEntityId}</saml:Issuer><saml:Subject><saml:NameID${nameIdFormatAttribute}>${nameId}</saml:NameID><saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><saml:SubjectConfirmationData${subjectConfirmationNotOnOrAfterAttribute}${recipientAttribute}${inResponseToAttribute}/></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore="${notBefore.toISOString()}"${conditionsNotOnOrAfterAttribute}><saml:AudienceRestriction><saml:Audience>${audience}</saml:Audience></saml:AudienceRestriction></saml:Conditions><saml:AuthnStatement AuthnInstant="${issueInstant.toISOString()}"${
     sessionIndex !== undefined ? ` SessionIndex="${sessionIndex}"` : ''
   }>${
     authnContextClassRef !== null

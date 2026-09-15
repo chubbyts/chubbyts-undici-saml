@@ -68,7 +68,7 @@ const samlAuthenticationMiddleware = createSamlAuthenticationMiddleware(
 
 const handler: Handler = async (serverRequest: ServerRequest<SamlAttributes>): Promise<Response> => {
   // attributes are typed as partial, the middleware guarantees "saml" for every handler behind it
-  const { identity } = serverRequest.attributes.saml!; // { nameId, nameIdFormat, sessionIndex?, authnContextClassRef?, issuer, attributes }
+  const { identity } = serverRequest.attributes.saml!; // { nameId, nameIdFormat?, sessionIndex?, authnContextClassRef?, issuer, attributes }
 
   return new Response(JSON.stringify({ nameId: identity.nameId }), {
     headers: { 'content-type': 'application/json' },

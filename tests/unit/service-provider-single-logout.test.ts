@@ -132,6 +132,19 @@ test('resolve logout url', async () => {
   verifyMocks();
 });
 
+test('resolve logout url without name id format', async () => {
+  const [samlServiceProvider, verifyMocks] = createServiceProvider();
+
+  const { nameIdFormat: _, ...identityWithoutNameIdFormat } = identity;
+
+  const logoutUrl = new URL((await samlServiceProvider.resolveLogoutUrl(identityWithoutNameIdFormat, '/')) as string);
+
+  // the identity provider sent no Format, so none goes back
+  expect(inflateRedirectMessage(logoutUrl, 'SAMLRequest')).toContain('<saml:NameID>user@example.com</saml:NameID>');
+
+  verifyMocks();
+});
+
 test('resolve logout url without session index', async () => {
   const [samlServiceProvider, verifyMocks] = createServiceProvider();
 

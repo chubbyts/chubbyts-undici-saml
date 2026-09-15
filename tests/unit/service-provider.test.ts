@@ -892,3 +892,23 @@ test.each<{
   expect(idpMetadataResolverMocks).toHaveLength(0);
   expect(assertionIdStoreMocks).toHaveLength(0);
 });
+
+test('verify saml response without name id format', async () => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, options);
+
+  // node-saml only sets the name id format if the NameID carries a Format attribute
+  const samlResponse = createSamlResponse(keyMaterial, { ...responseOptions, nameIdFormat: null });
+
+  expect(await samlServiceProvider.verifySamlResponse(samlResponse)).toEqual({
+    nameId: 'user@example.com',
+    authnContextClassRef: 'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport',
+    issuer: idpEntityId,
+    attributes: {},
+  });
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});
