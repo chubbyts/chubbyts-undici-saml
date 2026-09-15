@@ -1,7 +1,9 @@
 import { Buffer } from 'node:buffer';
 import { createSign, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
-import selfsigned from 'selfsigned';
 import { SignedXml } from 'xml-crypto';
 
 export type IdpKeyMaterial = {
@@ -10,17 +12,19 @@ export type IdpKeyMaterial = {
   certificate: string;
 };
 
-export const generateIdpKeyMaterial = async (): Promise<IdpKeyMaterial> => {
-  const pems = await selfsigned.generate([{ name: 'commonName', value: 'idp.example.com' }], {
-    keySize: 2048,
-    days: 365,
-    algorithm: 'sha256',
-  });
+export type KeyMaterialName = 'idp' | 'sp' | 'other';
+
+// pre-generated self-signed key pairs (tests/fixtures, generated once with the selfsigned package): generating a 2048
+// bit rsa key per test file, and within mutation testing per mutant, would dominate the test run time
+export const loadKeyMaterial = (name: KeyMaterialName): IdpKeyMaterial => {
+  const directory = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
+
+  const certificatePem = readFileSync(join(directory, `${name}.cert.pem`), 'utf8');
 
   return {
-    privateKey: pems.private,
-    certificatePem: pems.cert,
-    certificate: pems.cert
+    privateKey: readFileSync(join(directory, `${name}.key.pem`), 'utf8'),
+    certificatePem,
+    certificate: certificatePem
       .replace('-----BEGIN CERTIFICATE-----', '')
       .replace('-----END CERTIFICATE-----', '')
       .replaceAll(/\s+/g, ''),

@@ -8,14 +8,14 @@ import type { SamlServiceProviderOptions } from '../../src/service-provider';
 import { createSamlServiceProvider } from '../../src/service-provider';
 import { InvalidSamlResponseError } from '../../src/error';
 import type { SamlAssertionIdStore } from '../../src/assertion-id-store';
-import { createSamlResponse, generateIdpKeyMaterial } from '../helper';
+import { createSamlResponse, loadKeyMaterial } from '../helper';
 
 const idpEntityId = 'https://idp.example.com';
 const spEntityId = 'https://sp.example.com';
 const assertionConsumerServiceUrl = 'https://sp.example.com/saml/acs';
 const singleSignOnServiceUrl = 'https://idp.example.com/sso';
 
-const keyMaterial = await generateIdpKeyMaterial();
+const keyMaterial = loadKeyMaterial('idp');
 
 const metadata: IdpMetadata = {
   entityId: idpEntityId,
@@ -265,7 +265,7 @@ test('verify saml response with cached saml instance', async () => {
 });
 
 test('verify saml response with rotated metadata', async () => {
-  const rotatedKeyMaterial = await generateIdpKeyMaterial();
+  const rotatedKeyMaterial = loadKeyMaterial('other');
 
   const rotatedMetadata: IdpMetadata = { ...metadata, signingCertificates: [rotatedKeyMaterial.certificate] };
 
@@ -295,7 +295,7 @@ test('verify saml response with rotated metadata', async () => {
 });
 
 test('verify saml response with wrong signature key', async () => {
-  const otherKeyMaterial = await generateIdpKeyMaterial();
+  const otherKeyMaterial = loadKeyMaterial('other');
 
   const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
     { parameters: [], return: Promise.resolve(metadata) },

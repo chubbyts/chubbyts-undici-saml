@@ -273,7 +273,7 @@ const idpMetadataResolver = createIdpMetadataResolver('http://localhost:8080/rea
 
 Keycloak specifics: by default Keycloak signs the response but not the assertion (`wantAssertionsSigned: false`, or enable *Sign assertions* within the client), and the metadata is served for the URL the request comes through, so use the same host for the resolver and the browser (or pin it, e.g. `KC_HOSTNAME=http://keycloak:8080` in docker compose).
 
-The tests of this repository are self-contained: the integration tests run against an in-process http server serving generated metadata and saml responses signed with a generated certificate ([selfsigned][8], [xml-crypto][9]), no docker required:
+The tests of this repository are self-contained: the integration tests run against an in-process http server serving generated metadata and saml responses signed with a self-signed test certificate (`tests/fixtures`, [xml-crypto][9]), no docker required:
 
 ```sh
 pnpm test:integration --run
@@ -290,7 +290,6 @@ pnpm test:integration --run
 [5]: https://www.npmjs.com/package/@xmldom/xmldom
 [6]: https://www.npmjs.com/package/jose
 [7]: https://www.keycloak.org
-[8]: https://www.npmjs.com/package/selfsigned
 [9]: https://www.npmjs.com/package/xml-crypto
 [10]: https://docs.oasis-open.org/security/saml/v2.0/saml-profiles-2.0-os.pdf
 [11]: https://docs.oasis-open.org/security/saml/v2.0/saml-metadata-2.0-os.pdf

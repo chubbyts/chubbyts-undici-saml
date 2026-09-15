@@ -9,7 +9,7 @@ import {
   createLogoutRequestXml,
   createLogoutResponseXml,
   createRedirectQuery,
-  generateIdpKeyMaterial,
+  loadKeyMaterial,
   inflateRedirectMessage,
 } from '../helper';
 
@@ -20,8 +20,8 @@ const singleLogoutServiceUrl = 'https://sp.example.com/saml/slo';
 const singleSignOnServiceUrl = 'https://idp.example.com/sso';
 const idpSingleLogoutServiceUrl = 'https://idp.example.com/slo';
 
-const keyMaterial = await generateIdpKeyMaterial();
-const spKeyMaterial = await generateIdpKeyMaterial();
+const keyMaterial = loadKeyMaterial('idp');
+const spKeyMaterial = loadKeyMaterial('sp');
 
 const metadata: IdpMetadata = {
   entityId: idpEntityId,

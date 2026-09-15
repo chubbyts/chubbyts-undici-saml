@@ -9,14 +9,13 @@ import { createSamlAuthenticationMiddleware } from '../../src/middleware';
 import type { SamlServiceProviderOptions } from '../../src/service-provider';
 import { createSamlServiceProvider } from '../../src/service-provider';
 import { createSamlSession } from '../../src/session';
-import type { IdpKeyMaterial } from '../helper';
 import {
   createIdpMetadataXml,
   createLogoutRequestXml,
   createLogoutResponseXml,
   createRedirectQuery,
   createSamlResponse,
-  generateIdpKeyMaterial,
+  loadKeyMaterial,
   inflateRedirectMessage,
 } from '../helper';
 
@@ -26,11 +25,8 @@ const assertionConsumerServiceUrl = 'https://sp.example.com/saml/acs';
 const singleLogoutServiceUrl = 'https://sp.example.com/saml/slo';
 const sessionSecret = 'secret-secret-secret-secret-secret-secret';
 
-// oxlint-disable-next-line functional/no-let
-let keyMaterial: IdpKeyMaterial;
-
-// oxlint-disable-next-line functional/no-let
-let spKeyMaterial: IdpKeyMaterial;
+const keyMaterial = loadKeyMaterial('idp');
+const spKeyMaterial = loadKeyMaterial('sp');
 
 // oxlint-disable-next-line functional/no-let
 let server: Server;
@@ -45,9 +41,6 @@ let singleSignOnServiceUrl: string;
 let idpSingleLogoutServiceUrl: string;
 
 beforeAll(async () => {
-  keyMaterial = await generateIdpKeyMaterial();
-  spKeyMaterial = await generateIdpKeyMaterial();
-
   server = createServer((request, response) => {
     if (request.url === '/metadata') {
       response.writeHead(200, { 'content-type': 'application/samlmetadata+xml' });
@@ -228,7 +221,7 @@ test('with replayed saml response', async () => {
 test('with invalid saml response', async () => {
   const middleware = createMiddleware();
 
-  const otherKeyMaterial = await generateIdpKeyMaterial();
+  const otherKeyMaterial = loadKeyMaterial('other');
 
   const samlResponse = createSamlResponse(otherKeyMaterial, {
     idpEntityId,
