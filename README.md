@@ -19,7 +19,9 @@
 
 ## Description
 
-A minimal SAML 2.0 service provider ([Web Browser SSO Profile][10] and [Single Logout Profile][10]) integration for chubbyts-undici-server: resolves the identity provider's [metadata][11], redirects unauthenticated requests to the identity provider (HTTP-Redirect binding), consumes and verifies saml responses at the assertion consumer service (HTTP-POST binding, via [@node-saml/node-saml][4]), keeps the verified identity within an encrypted session cookie, passes it to the handler via request attributes and optionally handles single logout (HTTP-Redirect binding, service provider and identity provider initiated).
+A small SAML 2.0 service provider for chubbyts-undici-server, covering the [Web Browser SSO Profile][10] and the [Single Logout Profile][10] with the bindings a browser needs and nothing else. It resolves the identity provider's [metadata][11], redirects unauthenticated requests to the identity provider (HTTP-Redirect binding), consumes and verifies saml responses at the assertion consumer service (HTTP-POST binding, via [@node-saml/node-saml][4]), keeps the verified identity within an encrypted session cookie, passes it to the handler via request attributes and optionally handles single logout (HTTP-Redirect binding, service provider and identity provider initiated).
+
+Small means a small surface, not few checks: one middleware, one cookie, one metadata url, and every verification the profiles require (signatures, issuer, audience, `Destination` / `Recipient`, validity period, replay, see below) even where node-saml leaves it to the caller. Deliberately out of scope: a server side session store (the cookie is stateless), service provider metadata generation, the HTTP-POST and HTTP-Artifact bindings for logout, the SOAP back-channel, federation (`EntitiesDescriptor`) metadata and metadata signature verification.
 
 ## Requirements
 

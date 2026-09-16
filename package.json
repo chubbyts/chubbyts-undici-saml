@@ -2,7 +2,7 @@
   "name": "@chubbyts/chubbyts-undici-saml",
   "type": "module",
   "version": "1.0.0",
-  "description": "A minimal SAML 2.0 service provider (Web Browser SSO) integration for chubbyts-undici-server.",
+  "description": "A small SAML 2.0 service provider (Web Browser SSO and Single Logout) for chubbyts-undici-server.",
   "keywords": [
     "saml",
     "saml2",
