@@ -100,13 +100,18 @@ const resolveHttpRedirectService = (idpSsoDescriptor: Element, localName: string
 };
 
 const resolveSigningCertificates = (idpSsoDescriptor: Element): Array<string> => {
-  return childElements(idpSsoDescriptor, METADATA_NAMESPACE, 'KeyDescriptor')
-    .filter((keyDescriptor) => ['signing', null, ''].includes(keyDescriptor.getAttribute('use')))
-    .flatMap((keyDescriptor) =>
-      Array.from(keyDescriptor.getElementsByTagNameNS(SIGNATURE_NAMESPACE, 'X509Certificate')),
-    )
-    .map((certificateElement) => (certificateElement.textContent ?? '').replaceAll(/\s+/g, ''))
-    .filter((certificate) => certificate !== '');
+  return (
+    childElements(idpSsoDescriptor, METADATA_NAMESPACE, 'KeyDescriptor')
+      .filter((keyDescriptor) => ['signing', null, ''].includes(keyDescriptor.getAttribute('use')))
+      .flatMap((keyDescriptor) =>
+        Array.from(keyDescriptor.getElementsByTagNameNS(SIGNATURE_NAMESPACE, 'X509Certificate')),
+      )
+      .map((certificateElement) => certificateElement.textContent)
+      // the dom typing allows a null textContent, xmldom never returns one for an element
+      .filter((textContent): textContent is string => typeof textContent === 'string')
+      .map((textContent) => textContent.replaceAll(/\s+/g, ''))
+      .filter((certificate) => certificate !== '')
+  );
 };
 
 export const createIdpMetadataResolver = (

@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { inflateRawSync } from 'node:zlib';
+import { SAML } from '@node-saml/node-saml';
 import { expect, test, vi } from 'vitest';
 import { useFunctionMock } from '@chubbyts/chubbyts-function-mock/dist/function-mock';
 import { useObjectMock } from '@chubbyts/chubbyts-function-mock/dist/object-mock';
@@ -579,6 +580,34 @@ test('verify saml response with none success status', async () => {
   const error = await expectInvalidSamlResponseError(samlServiceProvider.verifySamlResponse(samlResponse));
 
   expect(error.message).toBe('SAML provider returned Responder error: unspecified');
+
+  expect(idpMetadataResolverMocks).toHaveLength(0);
+});
+
+test('verify saml response with non error rejection', async () => {
+  const [idpMetadataResolver, idpMetadataResolverMocks] = useFunctionMock<IdpMetadataResolver>([
+    { parameters: [], return: Promise.resolve(metadata) },
+  ]);
+
+  const samlServiceProvider = createSamlServiceProvider(idpMetadataResolver, options);
+
+  // node-saml is expected to throw errors only, a non error rejection is still reported as an invalid saml response
+  const validatePostResponseAsyncSpy = vi
+    .spyOn(SAML.prototype, 'validatePostResponseAsync')
+    .mockRejectedValueOnce('non error rejection');
+
+  try {
+    const error = await expectInvalidSamlResponseError(
+      samlServiceProvider.verifySamlResponse(createSamlResponse(keyMaterial, responseOptions)),
+    );
+
+    expect(error.message).toBe('non error rejection');
+    expect(error.cause).toBe('non error rejection');
+
+    expect(validatePostResponseAsyncSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    validatePostResponseAsyncSpy.mockRestore();
+  }
 
   expect(idpMetadataResolverMocks).toHaveLength(0);
 });

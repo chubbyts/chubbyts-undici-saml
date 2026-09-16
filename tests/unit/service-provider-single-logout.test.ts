@@ -1,3 +1,4 @@
+import { SAML } from '@node-saml/node-saml';
 import { expect, test, vi } from 'vitest';
 import { useFunctionMock } from '@chubbyts/chubbyts-function-mock/dist/function-mock';
 import type { IdpMetadata, IdpMetadataResolver } from '../../src/metadata';
@@ -470,6 +471,30 @@ test.each<{ name: string; query: string; message: string; cause?: boolean }>([
   verifyMocks();
 });
 
+test('verify logout request with non error rejection', async () => {
+  const [samlServiceProvider, verifyMocks] = createServiceProvider();
+
+  // node-saml is expected to throw errors only, a non error rejection is still reported as an invalid saml response
+  const validateRedirectAsyncSpy = vi
+    .spyOn(SAML.prototype, 'validateRedirectAsync')
+    .mockRejectedValueOnce('non error rejection');
+
+  try {
+    const error = await expectInvalidSamlResponseError(
+      samlServiceProvider.verifyLogoutRequest(createLogoutRequestQuery()),
+      'non error rejection',
+    );
+
+    expect(error.cause).toBe('non error rejection');
+
+    expect(validateRedirectAsyncSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    validateRedirectAsyncSpy.mockRestore();
+  }
+
+  verifyMocks();
+});
+
 test('resolve logout response url', async () => {
   const [samlServiceProvider, verifyMocks] = createServiceProvider();
 
@@ -644,6 +669,36 @@ test.each<{ name: string; query: string; message: string }>([
   const [samlServiceProvider, verifyMocks] = createServiceProvider();
 
   await expectInvalidSamlResponseError(samlServiceProvider.verifyLogoutResponse(query), message);
+
+  verifyMocks();
+});
+
+test('verify logout response with non error rejection', async () => {
+  const [samlServiceProvider, verifyMocks] = createServiceProvider();
+
+  const query = createRedirectQuery(
+    keyMaterial,
+    'SAMLResponse',
+    createLogoutResponseXml({ idpEntityId, destination: singleLogoutServiceUrl }),
+  );
+
+  // node-saml is expected to throw errors only, a non error rejection is still reported as an invalid saml response
+  const validateRedirectAsyncSpy = vi
+    .spyOn(SAML.prototype, 'validateRedirectAsync')
+    .mockRejectedValueOnce('non error rejection');
+
+  try {
+    const error = await expectInvalidSamlResponseError(
+      samlServiceProvider.verifyLogoutResponse(query),
+      'non error rejection',
+    );
+
+    expect(error.cause).toBe('non error rejection');
+
+    expect(validateRedirectAsyncSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    validateRedirectAsyncSpy.mockRestore();
+  }
 
   verifyMocks();
 });
