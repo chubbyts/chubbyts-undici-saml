@@ -57,6 +57,12 @@ test.each<{ name: string; options: SamlServiceProviderOptions; message: string }
     message: 'Invalid assertionConsumerServiceUrl "undefined": must be an absolute http(s) url',
   },
   {
+    // stringified it would be a valid url
+    name: 'array assertionConsumerServiceUrl',
+    options: { ...options, assertionConsumerServiceUrl: ['https://sp.example.com/saml/acs'] as unknown as string },
+    message: 'Invalid assertionConsumerServiceUrl "https://sp.example.com/saml/acs": must be an absolute http(s) url',
+  },
+  {
     name: 'relative assertionConsumerServiceUrl',
     options: { ...options, assertionConsumerServiceUrl: '/saml/acs' },
     message: 'Invalid assertionConsumerServiceUrl "/saml/acs": must be an absolute http(s) url',

@@ -113,6 +113,21 @@ test('resolve metadata of exactly maxSize', async () => {
   expect(fetchMocks).toHaveLength(0);
 });
 
+test('resolve metadata with maxSize 0', async () => {
+  const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
+    createFetchMock(metadataUrl, new Response(metadataXml)),
+  ]);
+
+  const idpMetadataResolver = createIdpMetadataResolver(metadataUrl, { fetch, maxSize: 0 });
+
+  await expectIdpMetadataError(
+    idpMetadataResolver(),
+    'Cannot fetch idp metadata from "https://idp.example.com/metadata": exceeds 0 bytes',
+  );
+
+  expect(fetchMocks).toHaveLength(0);
+});
+
 test('resolve metadata without body', async () => {
   const [fetch, fetchMocks] = useFunctionMock<typeof globalThis.fetch>([
     createFetchMock(metadataUrl, new Response(null)),
