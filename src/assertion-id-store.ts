@@ -15,7 +15,7 @@ export type SamlAssertionIdStore = {
 export const createInMemorySamlAssertionIdStore = (): SamlAssertionIdStore => {
   const expiries = new Map<string, number>();
 
-  const consume = async (id: string, expiresAt: number): Promise<boolean> => {
+  const consume = (id: string, expiresAt: number): Promise<boolean> => {
     const now = Date.now();
 
     // an expired assertion is rejected by its own NotOnOrAfter anyway: its id does not need to be remembered
@@ -27,13 +27,13 @@ export const createInMemorySamlAssertionIdStore = (): SamlAssertionIdStore => {
     });
 
     if (expiries.has(id)) {
-      return false;
+      return Promise.resolve(false);
     }
 
     // oxlint-disable-next-line functional/immutable-data
     expiries.set(id, expiresAt);
 
-    return true;
+    return Promise.resolve(true);
   };
 
   return { consume };
