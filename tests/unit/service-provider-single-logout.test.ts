@@ -557,6 +557,13 @@ test('verify logout response', async () => {
   verifyMocks();
 });
 
+const createLogoutResponseQuery = (inResponseTo: string | undefined): string =>
+  createRedirectQuery(
+    keyMaterial,
+    'SAMLResponse',
+    createLogoutResponseXml({ idpEntityId, destination: singleLogoutServiceUrl, inResponseTo }),
+  );
+
 test('verify logout response with validateInResponseTo "always"', async () => {
   const [samlServiceProvider, verifyMocks] = createServiceProvider(
     metadata,
@@ -568,24 +575,17 @@ test('verify logout response with validateInResponseTo "always"', async () => {
 
   const [, logoutRequestId] = /ID="([^"]+)"/.exec(inflateRedirectMessage(logoutUrl, 'SAMLRequest')) as RegExpExecArray;
 
-  const createQuery = (inResponseTo: string | undefined): string =>
-    createRedirectQuery(
-      keyMaterial,
-      'SAMLResponse',
-      createLogoutResponseXml({ idpEntityId, destination: singleLogoutServiceUrl, inResponseTo }),
-    );
-
   await expectInvalidSamlResponseError(
-    samlServiceProvider.verifyLogoutResponse(createQuery(undefined)),
+    samlServiceProvider.verifyLogoutResponse(createLogoutResponseQuery(undefined)),
     'Missing InResponseTo within logout response',
   );
 
   await expectInvalidSamlResponseError(
-    samlServiceProvider.verifyLogoutResponse(createQuery('_unknown')),
+    samlServiceProvider.verifyLogoutResponse(createLogoutResponseQuery('_unknown')),
     'InResponseTo is not valid',
   );
 
-  expect(await samlServiceProvider.verifyLogoutResponse(createQuery(logoutRequestId))).toBeUndefined();
+  expect(await samlServiceProvider.verifyLogoutResponse(createLogoutResponseQuery(logoutRequestId))).toBeUndefined();
 
   verifyMocks();
 });
