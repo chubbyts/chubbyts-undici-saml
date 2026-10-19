@@ -26,12 +26,12 @@ Small means a small surface, not few checks: one middleware, one cookie, one met
 ## Requirements
 
  * node: >=22
- * [@chubbyts/chubbyts-dic-types][14]: ^2.3.0
- * [@chubbyts/chubbyts-log-types][2]: ^3.3.0
- * [@chubbyts/chubbyts-undici-server][3]: ^1.2.0
+ * [@chubbyts/chubbyts-dic-types][14]: ^2.3.1
+ * [@chubbyts/chubbyts-log-types][2]: ^3.3.1
+ * [@chubbyts/chubbyts-undici-server][3]: ^1.3.1
  * [@node-saml/node-saml][4]: ^5.1.0
  * [@xmldom/xmldom][5]: ^0.9.12
- * [jose][6]: ^6.2.8
+ * [jose][6]: ^6.2.12
 
 ## Installation
 
